@@ -480,7 +480,7 @@ Any response from your app — even an error like `401` or `404` — confirms th
 
 ## Persistent vs. ephemeral URLs
 
-A Dev Tunnels persistent tunnel (`devtunnel create <tunnel-id>`) keeps its hostname across restarts, so you register your endpoint once. ngrok's free tier assigns a new hostname every run, so you must re-register (`teams app update <id> --endpoint ...`) each time — and possibly reinstall the app in Teams if the client cached the old endpoint.
+A Dev Tunnels persistent tunnel (`devtunnel create <tunnel-id>`) keeps its hostname across restarts, so you register the endpoint once. ngrok's free tier assigns a new hostname every run, so you must re-register (`teams app update <id> --endpoint ...`) each time — and possibly reinstall the app in Teams if the client cached the old endpoint.
 
 :::warning `--allow-anonymous` makes the tunnel public
 Anyone with the URL can reach it — required so Teams (not a Dev Tunnels client) can call your endpoint. It doesn't replace app-level auth: keep JWT/activity validation on, and delete the tunnel (`devtunnel delete <tunnel-id>`) when you're done.
