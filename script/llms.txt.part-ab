@@ -199,9 +199,9 @@ The application supports a number of activity types:
 | Route           | Invoke Path     | Responsibility                                                |
 | --------------- | --------------- | ------------------------------------------------------------- |
 | `config.open`   | `config/fetch`  | When app is installed, the user may configure it via a dialog |
-| `config.submit` | `config/submit` | Configuration dialog submission                                  |
-| `tab.open`      | `tab/fetch`    | Initializes tab configuration experiences                     |
-| `tab.submit`    | `tab/submit`   | Processes tab configuration submissions                       |
+| `config.submit` | `config/submit` | Configuration dialog submission                               |
+| `tab.open`      | `tab/fetch`     | Initializes tab configuration experiences                     |
+| `tab.submit`    | `tab/submit`    | Processes tab configuration submissions                       |
 
 ## Dialog Routes
 
