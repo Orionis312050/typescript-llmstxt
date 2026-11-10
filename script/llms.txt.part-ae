@@ -1,0 +1,829 @@
+tem.contentUrl ?? item.link;
+      if (!url || this.entries.has(url)) continue;
+      const snippet = (item.content ?? item.description ?? '').slice(0, 160);
+      this.entries.set(url, {
+        position: this.entries.size + 1,
+        url,
+        title: item.title ?? '',
+        snippet,
+      });
+    }
+  }
+}
+```
+
+To wire it in, call `citations.tryExtract(text)` inside each MCP tool's callback before returning the result. The collected entries are attached to the final reply in [Enhancing the Teams Experience](./teams-enhancements#citations).
+
+For Teams-specific enhancements — continue to [Enhancing the Teams Experience](./teams-enhancements).
+
+---
+
+### PAGE: Building Adaptive Cards
+
+# Building Adaptive Cards
+
+Adaptive Cards are JSON payloads that describe rich, interactive UI fragments.
+
+With `@microsoft/teams.cards` you can build these cards entirely in TypeScript/JavaScript while enjoying full IntelliSense and compiler safety.
+
+## The Builder Pattern
+
+`@microsoft/teams.cards` exposes small **builder helpers** including `Card`, `TextBlock`, `ToggleInput`, `ExecuteAction`, _etc._
+
+Each helper wraps raw JSON and provides fluent, chainable methods that keep your code concise and readable.
+
+```ts
+
+  AdaptiveCard,
+  TextBlock,
+  ToggleInput,
+  ExecuteAction,
+  ActionSet,
+} from '@microsoft/teams.cards';
+
+const card = new AdaptiveCard(
+  new TextBlock('Hello world', { wrap: true, weight: 'Bolder' }),
+  new ToggleInput('Notify me').withId('notify'),
+  new ActionSet(
+    new ExecuteAction({ title: 'Submit' })
+      .withData({ action: 'submit_basic' })
+      .withAssociatedInputs('auto')
+  )
+);
+```
+
+Benefits:
+
+| Benefit     | Description                                                                   |
+| ----------- | ----------------------------------------------------------------------------- |
+| Readability | No deep JSON trees—just chain simple methods.                                 |
+| Re‑use      | Extract snippets to functions or classes and share across cards.              |
+| Safety      | Builders validate every property against the Adaptive Card schema (see next). |
+
+:::info
+Source code lives in `teams.ts/packages/cards/src/`. Feel free to inspect or extend the helpers for your own needs.
+:::
+
+## Type‑safe Authoring & IntelliSense
+
+The package bundles the **Adaptive Card v1.5 schema** as strict TypeScript/JavaScript types.
+While coding you get:
+
+- **Autocomplete** for every element and attribute.
+- **In‑editor validation**—invalid enum values or missing required properties produce build errors.
+- Automatic upgrades when the schema evolves; simply update the package.
+
+```typescript
+// @ts-expect-error: "huge" is not a valid size for TextBlock
+const textBlock = new TextBlock('Valid', { size: 'huge' });
+```
+
+## The Visual Designer
+
+Prefer a drag‑and‑drop approach? Use [Microsoft's Adaptive Card Designer](https://adaptivecards.microsoft.com/designer.html):
+
+1. Add elements visually until the card looks right.
+2. Copy the JSON payload from the editor pane.
+3. Paste the JSON into your project **or** convert it to builder calls:
+
+```typescript
+const cardJson = /* copied JSON */;
+const card = new AdaptiveCard().withBody(cardJson);
+```
+
+```ts
+const rawCard: IAdaptiveCard = {
+  type: 'AdaptiveCard',
+  body: [
+    {
+      text: 'Please fill out the below form to send a game purchase request.',
+      wrap: true,
+      type: 'TextBlock',
+      style: 'heading',
+    },
+    {
+      columns: [
+        {
+          width: 'stretch',
+          items: [
+            {
+              choices: [
+                { title: 'Call of Duty', value: 'call_of_duty' },
+                { title: "Death's Door", value: 'deaths_door' },
+                { title: 'Grand Theft Auto V', value: 'grand_theft' },
+                { title: 'Minecraft', value: 'minecraft' },
+              ],
+              style: 'filtered',
+              placeholder: 'Search for a game',
+              id: 'choiceGameSingle',
+              type: 'Input.ChoiceSet',
+              label: 'Game:',
+            },
+          ],
+          type: 'Column',
+        },
+      ],
+      type: 'ColumnSet',
+    },
+  ],
+  actions: [
+    {
+      title: 'Request purchase',
+      type: 'Action.Execute',
+      data: { action: 'purchase_item' },
+    },
+  ],
+  version: '1.5',
+};
+```
+
+This method leverages the full Adaptive Card schema and ensures that the payload adheres strictly to `IAdaptiveCard`.
+
+:::tip
+You can use a combination of raw JSON and builder helpers depending on whatever you find easier.
+:::
+
+## End‑to‑end Example – Task Form Card
+
+Below is a complete example showing a task management form.
+
+Notice how the builder pattern keeps the file readable and maintainable:
+
+```ts
+
+  AdaptiveCard,
+  TextBlock,
+  TextInput,
+  ChoiceSetInput,
+  DateInput,
+  ActionSet,
+  ExecuteAction,
+} from '@microsoft/teams.cards';
+
+// ...
+
+app.on('message', async ({ send, activity }) => {
+  await send({ type: 'typing' });
+  const card = new AdaptiveCard(
+    new TextBlock('Create New Task', {
+      size: 'Large',
+      weight: 'Bolder',
+    }),
+    new TextInput({ id: 'title' }).withLabel('Task Title').withPlaceholder('Enter task title'),
+    new TextInput({ id: 'description' })
+      .withLabel('Description')
+      .withPlaceholder('Enter task details')
+      .withIsMultiline(true),
+    new ChoiceSetInput(
+      { title: 'High', value: 'high' },
+      { title: 'Medium', value: 'medium' },
+      { title: 'Low', value: 'low' }
+    )
+      .withId('priority')
+      .withLabel('Priority')
+      .withValue('medium'),
+    new DateInput({ id: 'due_date' })
+      .withLabel('Due Date')
+      .withValue(new Date().toISOString().split('T')[0]),
+    new ActionSet(
+      new ExecuteAction({ title: 'Create Task' })
+        .withData({ action: 'create_task' })
+        .withAssociatedInputs('auto')
+        .withStyle('positive')
+    )
+  );
+  await send(card);
+  // Or build a complex activity out that includes the card:
+  // const message = new MessageActivityInput('Enter this form').addCard('adaptive', card);
+  // await send(message);
+});
+```
+
+## Additional Resources
+
+- [**Official Adaptive Card Documentation**](https://adaptivecards.microsoft.com/)
+- [**Adaptive Cards Designer**](https://adaptivecards.microsoft.com/designer.html)
+
+### Summary
+
+- Use **builder helpers** for readable, maintainable card code.
+- Enjoy **full type safety** and IDE assistance.
+- Prototype quickly in the **visual designer** and refine with builders.
+
+Happy card building! 🎉
+
+---
+
+### PAGE: Creating Dialogs
+
+# Creating Dialogs
+
+:::tip
+If you're not familiar with how to build Adaptive Cards, check out [the cards guide](#adaptive-cards). Understanding their basics is a prerequisite for this guide.
+:::
+
+## Entry Point
+
+To open a dialog, add a button to your Adaptive Card using `OpenDialogData`. This sets up the `task/fetch` protocol and includes a `dialog_id` that the SDK uses to route to the correct handler.
+
+```typescript
+
+  AdaptiveCard,
+  IAdaptiveCard,
+  OpenDialogData,
+  SubmitAction,
+} from '@microsoft/teams.cards';
+// ...
+
+app.on('message', async ({ send }) => {
+  await send({ type: 'typing' });
+
+  const card: IAdaptiveCard = new AdaptiveCard({
+    type: 'TextBlock',
+    text: 'Select the examples you want to see!',
+    size: 'Large',
+    weight: 'Bolder',
+  }).withActions(
+    // OpenDialogData sets msteams.type = "task/fetch" and adds dialog_id for routing
+    new SubmitAction()
+      .withTitle('Simple form test')
+      .withData(new OpenDialogData('simple_form')),
+    new SubmitAction()
+      .withTitle('Webpage Dialog')
+      .withData(new OpenDialogData('webpage_dialog')),
+    new SubmitAction()
+      .withTitle('Multi-step Form')
+      .withData(new OpenDialogData('multi_step_form'))
+  );
+
+  await send(new MessageActivityInput('Enter this form').addCard('adaptive', card));
+});
+```
+
+## Handling Dialog Open Events
+
+When a user clicks the button, Teams sends a `task/fetch` invoke to your app. Register a handler using `dialog.open.<dialog_id>` to handle a specific dialog, or `dialog.open` for a catch-all.
+
+:::tip
+Use sub-routes like `dialog.open.simple_form` to handle specific dialogs directly, instead of a single catch-all handler with if-else logic. This keeps each handler focused and avoids routing boilerplate.
+:::
+
+```typescript
+
+// ...
+
+// Handle a specific dialog by ID — no if-else needed
+app.on('dialog.open.simple_form', async ({ activity }) => {
+  const card: IAdaptiveCard = new AdaptiveCard()...
+
+  return {
+    task: {
+      type: 'continue',
+      value: {
+        title: 'Title of Dialog',
+        card: cardAttachment('adaptive', card),
+      },
+    },
+  };
+});
+```
+
+### Rendering A Card
+
+You can render an Adaptive Card in a dialog by returning a card response.
+
+```typescript
+
+// ...
+
+app.on('dialog.open.simple_form', async () => {
+  const dialogCard = new AdaptiveCard(
+    {
+      type: 'TextBlock',
+      text: 'This is a simple form',
+      size: 'Large',
+      weight: 'Bolder',
+    },
+    new TextInput()
+      .withLabel('Name')
+      .withIsRequired()
+      .withId('name')
+      .withPlaceholder('Enter your name')
+  )
+    // Use SubmitData to set the "action" field, which routes to dialog.submit.<action>
+    .withActions(
+      new SubmitAction().withTitle('Submit').withData(new SubmitData('simple_form'))
+    );
+
+  return {
+    task: {
+      type: 'continue',
+      value: {
+        title: 'Simple Form Dialog',
+        card: cardAttachment('adaptive', dialogCard),
+      },
+    },
+  };
+});
+```
+
+:::info
+The action type for submitting a dialog must be `Action.Submit`. This is a requirement of the Teams client. If you use a different action type, the dialog will not be submitted and the agent will not receive the submission event.
+:::
+
+### Rendering A Webpage
+
+You can render a webpage in a dialog as well. There are some security requirements to be aware of:
+
+1. The webpage must be hosted on a domain that is allow-listed as `validDomains` in the Teams app [manifest](/teams/manifest) for the agent
+2. The webpage must also host the [teams-js client library](https://www.npmjs.com/package/@microsoft/teams-js). The reason for this is that for security purposes, the Teams client will not render arbitrary webpages. As such, the webpage must explicitly opt-in to being rendered in the Teams client. Setting up the teams-js client library handles this for you.
+
+```typescript
+
+// ...
+
+app.on('dialog.open.webpage_dialog', async () => {
+  return {
+    task: {
+      type: 'continue',
+      value: {
+        title: 'Webpage Dialog',
+        // The webpage must be publicly accessible, use the teams-js client library,
+        // and be registered in validDomains in the manifest.
+        url: `${process.env['BOT_ENDPOINT']}/tabs/dialog-form`,
+        width: 1000,
+        height: 800,
+      },
+    },
+  };
+});
+```
+
+### Setting up Embedded Web Content
+
+To serve web content for dialogs, you can use the `tab` method to host static webpages:
+
+```typescript
+
+// In your app setup (e.g., index.ts)
+// Hosts a static webpage at /tabs/dialog-form
+app.tab('dialog-form', path.join(__dirname, 'views', 'customform'));
+```
+
+---
+
+### PAGE: Executing Functions
+
+# Executing Functions
+
+The client App exposes an `exec()` method that can be used to call functions implemented in an agent created with this SDK. The function call uses the `app.http` client to make a request, attaching a bearer token created from the `app.msalInstance` MSAL public client application, so that the remote function can authenticate and authorize the caller.
+
+The `exec()` method supports passing arguments and provides options to attach custom request headers and/or controlling the MSAL token scope.
+
+## Invoking a remote function
+
+When the tab app and the remote agent are deployed to the same location and in the same AAD app, it's simple to construct the client app and call the function.
+
+```typescript
+
+const app = new App(clientId);
+await app.start();
+
+// this requests a token for 'api://<clientId>/access_as_user' and attaches
+// that to an HTTP POST request to /api/functions/my-function
+const result = await app.exec<string>('my-function');
+```
+
+If the deployment is more complex, the [AppOptions](#app-options) can be used to influence the URL as well as the scope in the token.
+
+## Function arguments
+
+Any argument for the remote function can be provided as an object.
+
+```typescript
+const args = { arg1: 'value1', arg2: 'value2' };
+const result = await app.exec('my-function', args);
+```
+
+## Request headers
+
+By default, the HTTP request will include a header with a bearer token as well as headers that give contextual information about the state of the app, such as which channel or team or chat or meeting the tab is active in.
+
+If needed, you can add additional headers to the `requestHeaders` option field. This may be handy to provide additional context to the remote function, such as a logging correlation ID.
+
+```typescript
+const requestHeaders = {
+  'x-custom-correlation-id': 'aaaa0000-bb11-2222-33cc-444444dddddd',
+};
+
+// custom headers when the function does not take arguments
+const result = await app.exec('my-function', undefined, { requestHeaders });
+
+// custom headers when the function takes arguments
+const args = { arg1: 'value1', arg2: 'value2' };
+const result = await app.exec('my-other-function', args, { requestHeaders });
+```
+
+## Request bearer token
+
+By default, the HTTP request will include a header with a bearer token acquired by requesting an `access_as_user` permission. The resource used for the request depends on the `remoteApiOptions.remoteAppResource` [AppOption](#app-options). If this app option is not provided, the token is requested for the scope `api://<clientId>/access_as_user`. If this option is provided, the token is requested for the scope `<remoteApiOptions.remoteAppResource>/access_as_user`.
+
+When calling a function that requires a different permission or scope, the `exec` options let you override the behavior.
+
+To specify a custom permission, set the permission field in the `exec` options.
+
+```typescript
+// with this option, the exec() call will request a token for either
+// api://<clientId>/my_custom_permission or
+// <remoteApiOptions.remoteAppResource>/my_custom_permission,
+// depending on the app options used.
+const options = {
+  permission: 'my_custom_permission',
+};
+
+// custom permission when the function does not take arguments
+const result = await app.exec('my-function', undefined, options);
+
+// custom permission when the function takes arguments
+const args = { arg1: 'value1', arg2: 'value2' };
+const result = await app.exec('my-other-function', args, options);
+```
+
+Sometimes you may need even more control. You might for need a scope for a different resource than your default when calling a particular remote agent function. In these cases you can provide the exact token request object you need as part of the `exec` options.
+
+```typescript
+// with this option, the exec() call will request a token for exactly
+// api://my-custom-resources/my_custom_scope, regardless of which app
+// options were used to construct the app.
+const options = {
+  msalTokenRequest: {
+    scopes: ['api://my-custom-resources/my_custom_scope'],
+  },
+};
+
+// custom token request when the function does not take arguments
+const result = await app.exec('my-function', undefined, options);
+
+// custom token request when the function takes arguments
+const args = { arg1: 'value1', arg2: 'value2' };
+const result = await app.exec('my-other-function', args, options);
+```
+
+## Ensuring user consent
+
+The `exec()` function supports incremental, just-in-time consent such that the user is prompted to consent during the `exec()` call, if they haven't already consented earlier.
+
+If you find that you'd rather test for consent or request consent before making the `exec()` call, the `hasConsentForScopes` and `ensureConsentForScopes` can be used. More details about those are given in the [Graph](../graph) section.
+
+## References
+
+- [Graph API overview](https://learn.microsoft.com/en-us/graph/api/overview)
+- [Graph API permissions overview](https://learn.microsoft.com/en-us/graph/permissions-reference)
+
+---
+
+### PAGE: File and Image Handling
+
+# File and Image Handling
+
+This section covers how your app receives files and inline images and reads their bytes, and how it sends images back.
+
+:::info[Preview]
+The high-level file API is being rolled out incrementally. Today it supports **receiving** files attached to messages via the TypeScript, Python, and C# SDKs: in personal (1:1) chats for every agent, and soon in group chats and channels for agentic users. Receiving inline images through the same API is planned for version 2.2.0.
+:::
+
+## Files vs. attachments
+
+In personal scope, `activity.attachments` carries every non-text part: files the user attached, inline images, Adaptive Cards, `@mentions`, link previews, and other content the client or the platform adds. A **file** is the specific subset of attachments that describes a document the user attached, one whose `contentType` is `file.download.info`.
+
+The `ctx.files` accessor is the attached-file view over that raw array. It maps each attached file and inline image to a lazy handle you can download from, and skips everything else. The original `activity.attachments` array is always available when you need the raw payload or a non-file attachment.
+
+An **inline image** is an image attachment with an authenticated download URL, commonly paired with an HTML attachment that describes where the image appeared in the composed message. Inline images are listed by the high-level file API alongside attached files, marked with an inline image attachment style.
+
+Sending works similarly: an image you send is an attachment whose content type is an image MIME type, which is why it renders inline rather than arriving as a document.
+
+## In this section
+
+- **[Receiving Files](#receiving-files)** — read files a user attaches to a message, stream or download their bytes, and handle unsupported scopes, expired links, and agentic users.
+- **[Receiving Inline Images](#receiving-inline-images)** — list images pasted into a message, download their bytes, and handle image formats that cannot be downloaded.
+- **[Sending Inline Images](#sending-inline-images)** — send an image that renders directly in the conversation, from a hosted URL or as base64-encoded bytes, within the platform's size and format limits.
+
+## Resources
+
+- [Files in Teams bots](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4)
+- [Picture messages](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/conversation-messages#use-picture-messages)
+
+---
+
+### PAGE: Getting started
+
+# Getting started
+
+To use this package, you can either set up a new project using the Teams Developer CLI, or add it to an existing tab app project.
+
+## Setting up a new project
+
+The Teams Developer CLI ships a `tab` template that scaffolds a new tab app with a callable remote function. First install the Teams Developer CLI as outlined in the [Quickstart](#quickstart) guide, then create the app:
+
+```sh
+teams project new typescript my-first-tab-app --template tab
+```
+
+Once the project is created, follow [Quickstart: Register your app](/get-started/quickstart-register) to register and sideload it into Teams.
+
+## Adding to an existing project
+
+This package is set up to integrate well with existing Tab apps. The main consideration is that the AAD app must be configured to support Nested App Authentication (NAA). Otherwise it will not be possible to acquire the bearer token needed to call Microsoft Graph APIs or remote agent functions.
+
+After verifying that the app is configured for NAA, simply use your package manager to add a dependency on `@microsoft/teams.client` and then proceed with [Starting the app](#using-the-app).
+
+If you're already using a current version of TeamsJS, that's fine. This package works well with TeamsJS.
+
+If you're already using Microsoft Authentication Library (MSAL) in an NAA enabled app, that's great! The [App options](#app-options) page shows how you can use a single common MSAL instance.
+
+## Resources
+
+- [Quickstart: Register your app](/get-started/quickstart-register)
+- [Configuring an app for Nested App Authentication](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/authentication/nested-authentication#configure-naa)
+
+---
+
+### PAGE: HTML Widgets
+
+# HTML Widgets
+
+HTML Widgets let your app render rich, interactive HTML inside a Teams message.
+A widget is an [MCP Apps (ext-apps)](https://github.com/modelcontextprotocol/ext-apps) surface that the Teams client renders in a sandboxed iframe.
+The widget can call tools on your app, send messages back, request display mode changes, open links, and contribute content to the model context for future turns.
+
+The SDK helps you send a widget and handle its tool calls, but it does not run any code inside the widget.
+Your widget's own JavaScript must complete the MCP Apps handshake and report its size, or it will not display correctly.
+
+:::info What your widget must do
+- **Send `ui/initialize`, then `ui/notifications/initialized`.** Do not send other requests until the `ui/initialize` response arrives.
+- **Report its size with `ui/notifications/size-changed`.** Without a report the host leaves the widget at about 150px tall.
+
+See [Your widget owns the handshake and sizing](#your-widget-owns-the-handshake-and-sizing).
+:::
+
+:::warning Preview
+HTML Widgets are in preview and the API surface may change. HTML Widgets are planned for public preview on 11/16.
+Every widget type and helper is annotated `@experimental` in its JSDoc (diagnostic `ExperimentalTeamsHtmlWidget`) to mark it as preview.
+:::
+
+:::warning Message export
+There is a gap in the export APIs that prevents widget content from being exported. If your organization determines this is a problem, you can disable bots that may send widgets.
+:::
+
+## How it works
+
+A widget travels inside a normal message.
+The app sends a message with `textFormat: 'extendedmarkdown'` whose text contains a fenced `html-widget` code block holding a JSON payload:
+
+````text
+Here is your widget:
+
+```html-widget
+
+```
+````
+
+The Teams client parses that block and loads the widget HTML in a sandboxed iframe.
+The widget speaks the MCP Apps protocol to the client over `postMessage`, and from that point the widget and your app communicate through a small set of methods.
+
+## The widget payload
+
+Every widget is described by a payload with the following fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | yes | The widget type identifier. Currently only `widget/mcp-ui` is supported. The SDK builders default this for you. |
+| `name` | yes | The display name of the widget. |
+| `html` | yes | The HTML content that makes up the widget. |
+| `domain` | yes | A valid domain URL applied to sandbox metadata. It does not need to resolve or serve content, but must be non-empty. This is informational metadata, not a verified identity claim. |
+| `description` | no | A description of the widget. |
+| `securityPolicy` | no | Allowed origins for network requests, resources, frames, and base URIs. See [Security policy](#security-policy). |
+| `toolInput` | no | Data passed to the widget as initial context. The host delivers it after the handshake in a `ui/notifications/tool-input` notification, as `params.arguments`. |
+| `toolOutput` | no | Data the tool produced alongside the widget. The host delivers it after the handshake in a `ui/notifications/tool-result` notification, with the `content`, `structuredContent`, and `isError` fields as `params`. |
+| `permissions` | no | Capabilities the widget requests from the host (camera, microphone, geolocation, clipboard write). |
+| `mcpUrl` | no | The URL of the MCP server that produced the widget. The Teams client combines it with the owner id to derive the widget's hosting origin, so it is not itself the origin. A widget produced by an MCP server must set it to that server's URL to get its own hosting scope. |
+| `correlationId` | no | A correlation vector for the widget. The Teams client returns it to your app on tool calls from the widget. |
+
+## Your widget owns the handshake and sizing
+
+The SDK sends your HTML exactly as you author it. It does not add any script to it.
+Your widget must do two things itself:
+
+- **Complete the handshake.** Send a `ui/initialize` request to the host with `protocolVersion` (`2026-01-26`), `appInfo` (`name` and `version`), and `appCapabilities`. Wait for the response before sending any other request, because a request sent earlier gets an empty result. When the response arrives, send `ui/notifications/initialized`. The `ui/initialize` result carries `protocolVersion`, `hostCapabilities`, `hostInfo`, and `hostContext` (such as the theme, locale, and display modes). If the response is an error, the handshake failed and the widget must not continue.
+- **Report its size.** Report its height with `ui/notifications/size-changed` after the handshake and whenever its content changes. Without a size report the host leaves the widget at about 150px tall. Observe the widget's root element with a single `ResizeObserver` and report `getBoundingClientRect().height` as is. Rounding the value can leave a gap or clip the content by a pixel.
+
+Messages travel as JSON-RPC 2.0 objects over `window.parent.postMessage`. A request carries an `id` and gets a response with the same `id`. A notification has no `id`.
+
+```js
+const root = document.getElementById('root');
+const post = (message) => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
+
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent) return;
+  const data = event.data;
+  if (data?.id === 'init') {
+    if (data.error) return console.error('Widget handshake failed', data.error);
+    post({ method: 'ui/notifications/initialized', params: {} });
+    new ResizeObserver(() =>
+      post({ method: 'ui/notifications/size-changed', params: { height: root.getBoundingClientRect().height } })
+    ).observe(root);
+  }
+  if (data?.method === 'ui/notifications/tool-input') console.log(data.params.arguments);
+  if (data?.method === 'ui/notifications/tool-result') console.log(data.params.structuredContent);
+});
+
+post({
+  id: 'init',
+  method: 'ui/initialize',
+  params: { protocolVersion: '2026-01-26', appInfo: { name: 'my-widget', version: '1.0.0' }, appCapabilities: {} },
+});
+```
+
+A widget can ask the host to change its display mode by sending a `ui/request-display-mode` request with ` "mode": "fullscreen" `.
+
+## What the SDK provides
+
+The SDK does not change the wire contract.
+Everything a widget needs could be assembled by hand.
+Instead the SDK ships a small set of helpers so you never have to build the fenced code block, escape the JSON, or hand-parse invoke payloads.
+The SDK does not run inside the widget, so it does not perform the `ui/initialize` handshake, report the widget's size, or deliver `toolInput` and `toolOutput`. The widget does the first two, and the host sends the last two as `ui/notifications/tool-input` and `ui/notifications/tool-result` after the handshake.
+
+- **Build helpers**: `buildHtmlWidgetMessage` and `buildHtmlWidgetMarkdown` turn a payload into a ready-to-send message (or the raw markdown string) with the correct `html-widget` fence and `extendedmarkdown` text format. See [Sending widgets](#sending-widgets).
+- **A typed tool-call handler**: the `widget.callTool` event receives `htmlwidget/calltool` invokes when a widget calls one of your tools, gives you the typed tool name and arguments, and lets you return a typed result. See [Handling tool calls](#handling-tool-calls).
+- **Security helpers**: `validateSecurityPolicy` audits that external references in your HTML are covered by your declared security policy. See [Security policy](#security-policy).
+- **A model-context helper**: `tryGetWidgetModelContext` parses a widget's `ui/update-model-context` request off an incoming message activity. See [Updating model context](#updating-model-context).
+
+For how failures surface at each stage, from sending to rendering, see [Error handling](#error-handling).
+
+## Resources
+
+- [MCP Apps (ext-apps) specification](https://github.com/modelcontextprotocol/ext-apps)
+- [Model Context Protocol](https://modelcontextprotocol.io)
+
+---
+
+### PAGE: Middleware
+
+# Middleware
+
+Middleware is a useful tool for logging, validation, and more.
+You can easily register your own middleware using the `app.use` method.
+
+Below is an example of a middleware that will log the elapse time of all handlers that come after it.
+
+```typescript
+app.use(async ({ log, next }) => {
+  const startedAt = new Date();
+  await next();
+  log.debug(new Date().getTime() - startedAt.getTime());
+});
+```
+
+---
+
+### PAGE: Set up Agentic Users
+
+# Set up Agentic Users
+
+## 1. Set up an AI teammate
+
+Follow [Set up an agent blueprint](https://learn.microsoft.com/microsoft-agent-365/developer/registration) and select the AI teammate setup.
+
+To run a config-free setup, provide an agent name:
+
+```powershell
+a365 setup all `
+  --agent-name "MyAgent" `
+  --aiteammate
+```
+
+## 2. Configure Teams SDK
+
+Configure Teams SDK with the blueprint identity. It uses the same authentication settings as a standard Teams app, and the blueprint ID is the application (client) ID.
+
+| Agent 365 value      | App authentication setting                                                       |
+| -------------------- | -------------------------------------------------------------------------------- |
+| Blueprint ID         | Application (client) ID (`CLIENT_ID`)                                            |
+| Blueprint credential | Client secret, user-assigned managed identity, or federated identity credentials |
+| Tenant ID            | Tenant ID (`TENANT_ID`)                                                          |
+
+Configure these values as described in App Authentication.
+
+## 3. Deploy and register the messaging endpoint
+
+Deploy your Teams SDK app to a publicly accessible host, then [register its messaging endpoint](https://learn.microsoft.com/microsoft-agent-365/developer/agent-messaging-endpoint), typically `https://<host>/api/messages`.
+
+```powershell
+a365 setup blueprint --endpoint-only `
+  --messaging-endpoint "https://<host>/api/messages"
+```
+
+## 4. Publish and create an instance
+
+1. Run `a365 publish` to create the agent package.
+2. Follow [Publish the agent](https://learn.microsoft.com/microsoft-agent-365/developer/publish) to upload the package to the Microsoft 365 admin center.
+3. [Create an agent instance](https://learn.microsoft.com/microsoft-agent-365/developer/create-instance).
+
+After the instance is approved, its Agentic User can communicate through the deployed Teams SDK app.
+
+---
+
+### PAGE: Static Pages
+
+# Static Pages
+
+The `App` class lets you host web apps in the agent. This is useful for an efficient inner loop — you can build, deploy, and sideload both an agent and a Tab app inside Teams in a single step. It's also useful in production, since it makes it straightforward to host a simple experience such as an agent configuration page or a Dialog.
+
+To host a static tab web app, call the `app.tab()` function and provide an app name and a path to a folder containing an `index.html` file to be served up.
+
+```typescript
+app.tab('myApp', path.resolve('dist/client'));
+```
+
+This registers a route that is hosted at `http://localhost:PORT/tabs/myApp` or `https://BOT_DOMAIN/tabs/myApp`.
+
+## Additional resources
+
+- For more details about Tab apps, see the [Tabs](#tabs) in-depth guide.
+- For an example of hosting a Dialog, see the [Creating Dialogs](#creating-dialogs) in-depth guide.
+
+---
+
+### PAGE: Agentic Identity
+
+# Agentic Identity
+
+:::note Availability
+Agentic Identity support is available in Teams SDK v2.1 for TypeScript.
+:::
+
+These guides show how to connect a Teams SDK app to an **Agentic User**—an AI teammate represented by its own Microsoft Entra user account.
+
+## Identity model
+
+An Agentic Blueprint defines the shared credentials and baseline permissions for a type of agent. One blueprint can be used to create multiple Agentic User instances.
+
+```mermaid
+flowchart LR
+  B[Agentic Blueprint ID<br/>shared credentials and permissions]
+  B --> U1[Agentic User instance A]
+  B --> U2[Agentic User instance B]
+```
+
+One blueprint can support multiple independently managed Agentic Users while the same Teams SDK app handles their messages.
+
+For background on blueprints, agent identities, and authentication modes, see [Agent 365 identity](https://learn.microsoft.com/microsoft-agent-365/developer/identity?view=o365-worldwide).
+
+The guides show how to:
+
+- Receive messages addressed to an Agentic User.
+- Reply with the correct Agentic User identity.
+- Send proactive messages with an explicit agent identity.
+- Handle Agentic User lifecycle events.
+- Add Agent 365 identity and correlation context to telemetry.
+
+---
+
+### PAGE: Dialogs
+
+# Dialogs
+
+Dialogs are a helpful paradigm in Teams which improve interactions between your agent and users. When dialogs are **invoked**, they pop open a window for a user in the Teams client. The content of the dialog can be supplied by the agent application.
+
+:::note
+In Teams client v1, dialogs were called task modules. They may occasionaly be used synonymously.
+:::
+
+## Key benefits
+
+1. Dialogs pop open for a user in the Teams client. This means in group-settings, dialog actions are not visible to other users in the channel, reducing clutter.
+
+2. Interactions like filling out complex forms, or multi-step forms where each step depends on the previous step are excellent use cases for dialogs.
+
+3. The content for the dialog can be hard-coded in, or fetched at runtime. This makes them extremely flexible and powerful.
+
+## Resources
+
+- [Task Modules](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/what-are-task-modules)
+- [Invoking Task Modules](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/task-modules/invoking-task-modules)
+
+---
+
+### PAGE: Enhance the Teams Experience
+
+# Enhance the Teams Experience
+
+:::warning[Our AI libraries are deprecated]
+The Teams SDK has deprecated its own AI libraries — the `@microsoft/teams.ai` packages (`ChatPrompt`, `Model`, and the older `@microsoft/teams.mcp` / `@microsoft/teams.a2a` plugins) — in favor of dedicated AI frameworks. Use the pattern shown in these guides instead: bring the OpenAI SDK (or any framework you like), and wire MCP and A2A directly into your Teams app.
+:::
+
+:::warning[SDK 2.0 AI libraries are deprecated]
+For .NET, implement AI enhancements with SDK 2.1 plus external model/agent frameworks. The Teams SDK provides the chat/activities surface; your AI stack provides reasoning/tool orchestration.
+:::
+
+You can enrich the agent output into a more Teams-native experience — adding structure, interactivity, and metadata on top 
