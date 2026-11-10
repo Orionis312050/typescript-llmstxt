@@ -1,0 +1,869 @@
+# Teams SDK - TypeScript Documentation (Complete, offline)
+
+> Complete offline edition: every documentation page is inlined below as its own section.
+> Internal links are in-file `#anchors`; no external fetching is required.
+> Compile into per-feature files with: `script/compilers.sh script/llms.txt`
+
+## CAT: _root
+
+### PAGE: Essentials
+
+# Essentials
+
+At its core, an application that hosts an agent on Microsoft Teams exists to do three things well: listen to **activities**, handle the ones that matter, and respond efficiently. Whether a user sends a message, opens a dialog, or clicks a button — your app is there to interpret the activity and act on it.
+
+With Teams SDK, we've made it easier than ever to build this kind of reactive, conversational logic. The SDK gives you simple, strongly-typed handlers to connect to Teams, react to activities, and build intelligent agent behaviors quickly.
+
+At its core, an application that hosts an agent on Microsoft Teams exists to do three things well: listen to events, handle the ones that matter, and respond efficiently. Whether a user sends a message, opens a dialog, or clicks a button — your app is there to interpret the event and act on it.
+
+With Teams SDK, we've made it easier than ever to build this kind of reactive, conversational logic. The SDK introduces a few simple but powerful paradigms to help you connect to Teams, register handlers, and build intelligent agent behaviors quickly.
+
+Before diving in, let's define a few key terms:
+
+- Event: Anything interesting that happens on Teams — or within your application as a result of handling an earlier event.
+- Activity: A special type of Teams-specific event. Activities include things like messages, reactions, and adaptive card actions.
+- InvokeActivity: A specific kind of activity triggered by user interaction (like submitting a form), which may or may not require a response.
+- Handler: The logic in your application that reacts to events or activities. Handlers decide what to do, when, and how to respond.
+
+In the **2.1**, your app is a standard ASP.NET Core application. Incoming activities from Teams arrive at your app's endpoint, pass through any **turn middleware** you register, and are routed to the dedicated **activity handler** (`OnMessage`, `OnEvent`, `OnMembersAdded`, …) that matches.
+
+```mermaid
+flowchart LR
+    Teams["Teams"]
+    Server["App Server<br/>(ASP.NET Core)"]
+    Middleware["Turn Middleware"]
+    Router["Activity Router"]
+    Handlers["Activity Handlers<br/>(OnMessage, OnEvent, ...)"]
+
+    Teams --> |Activity| Server
+    Teams --> |Signed In| Server
+    Teams --> |...other<br/>incoming events| Server
+    Server --> Middleware
+    Middleware --> Router
+    Router --> |message activity| Handlers
+    Router --> |card activity| Handlers
+    Router --> |installation activity| Handlers
+    Router --> |...other activities| Handlers
+```
+
+:::note[SDK 2.0 (Legacy)]
+SDK 2.0 routed both incoming and outgoing events through a **plugin event bus** before they reached your handlers. The 2.1 removes plugins in favor of standard ASP.NET Core **middleware** and **dependency injection**.
+:::
+
+```mermaid
+flowchart LR
+    Teams["Teams"]
+    Server["App Server"]
+    AppEventHandlers["Event Handler (app.event())"]
+    AppRouter["Activity Event Router"]
+    AppActivityHandlers["Activity Handlers (app.on())"]
+
+    Teams --> |Activity| Server
+    Teams --> |Signed In| Server
+    Teams --> |...other<br/>incoming events| Server
+    Server --> |ActivityEvent<br/>or InvokeEvent| AppRouter
+    Server ---> |incoming<br/>events| AppEventHandlers
+    Server ---> |outgoing<br/>events<br/>| AppEventHandlers
+    AppRouter --> |message activity| AppActivityHandlers
+    AppRouter --> |card activity| AppActivityHandlers
+    AppRouter --> |installation activity| AppActivityHandlers
+    AppRouter --> |...other activities| AppActivityHandlers
+
+    linkStyle 0,3 stroke:#66fdf3,stroke-width:1px,color:Tomato
+    linkStyle 1,2,4,5 stroke:#66fdf3,stroke-width:1px
+    linkStyle 6,7,8,9 color:Tomato
+```
+
+This section will walk you through the foundational pieces needed to build responsive, intelligent agents using the SDK.
+
+---
+
+### PAGE: In-Depth Guides
+
+# In-Depth Guides
+
+This documentation covers advanced features and capabilities of the Teams SDK in TypeScript.
+
+This section provides comprehensive technical guides for integration with useful Teams features. Learn how to implement AI-powered bots, create adaptive cards, manage authentication flows, and build sophisticated message extensions. Each guide includes practical examples and best practices for production applications.
+
+---
+
+### PAGE: Teams Integration
+
+# Teams Integration
+
+This section describes Teams-specific features and components of the SDK, helping you understand how your agent integrates with the Microsoft Teams platform.
+
+## Core Concepts
+
+When working with Teams, several key components come into play:
+
+- **DevTunnel**: Enables local development by creating secure public endpoints
+- **App Provisioning**: Handles registration and configuration in Teams
+- **Environment Setup**: Manages Teams-specific configuration files
+- **App Packaging**: Bundles your agent for Teams deployment
+
+## In This Section
+
+1. [Core Concepts](core-concepts) - Understanding the Teams deployment process and architecture
+2. [Teams Manifest](manifest) - Configuring your agent's Teams presence
+3. [Enabling in M365 Copilot](enabling-in-copilot) - Make your Teams app available in M365 Copilot
+
+For the manual Azure setup path (existing Entra apps, locked-down environments, custom tenant policies), see [Azure Configuration](#azure-configuration).
+
+Each guide provides detailed information about specific aspects of Teams integration, from local development to production deployment.
+
+---
+
+### PAGE: Developer Tools
+
+# Developer Tools
+
+Teams SDK ships with tools that simplify and speed up building and testing agents. Use the Teams Developer CLI to scaffold and manage projects, and the Microsoft 365 Agents Playground to test your agent locally without sideloading into Teams.
+
+1. [Teams Developer CLI](./cli)
+2. [Microsoft 365 Agents Playground](./agents-playground)
+3. [Local Tunnels](./local-tunnels) — expose your local server publicly for Teams, message extensions, and other webhooks
+4. [Agent Skills](#agent-skills) — give AI coding assistants context for Teams development
+5. [llms.txt](./llms-txt) — documentation files optimized for AI coding assistants
+6. [DevTools](./devtools) (deprecated)
+
+---
+
+## CAT: developer-tools
+
+### PAGE: Teams Developer CLI
+
+# Teams Developer CLI
+
+The Teams Developer CLI documentation has moved to its own section.
+
+**[Go to CLI Documentation](/cli)**
+
+---
+
+### PAGE: Agent Skills
+
+# Agent Skills
+
+[Agent Skills](https://aka.ms/teams-agent-skills) give AI coding assistants relevant context for specific development tasks. The `teams-dev` skill is the go-to agent skill for Teams bot development. It gives AI coding assistants (Claude Code, Cursor, GitHub Copilot, and others) relevant context to assist in developing Teams bots and use the Teams Developer CLI to manage your bot infrastructure. Instead of running CLI commands manually, you describe what you want and your AI assistant handles the rest.
+
+:::note Alternative: Use llms.txt directly
+If you'd rather not install a skill, you can provide the same context by pointing your AI tool to the llms.txt URL:
+
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms.txt
+```
+
+:::
+
+## Install the `teams-dev` skill
+
+**GitHub Copilot CLI:**
+
+Add the marketplace (first time only):
+
+```
+/plugin marketplace add microsoft/teams-sdk
+```
+
+Install the skill:
+
+```
+/plugin install teams-sdk@teams-skills
+```
+
+After installing, restart GitHub Copilot for the skills to load.
+
+**Claude Code:**
+
+Add the marketplace (first time only):
+
+```
+/plugin marketplace add microsoft/teams-sdk
+```
+
+Install the skill:
+
+```
+/plugin install teams-sdk@teams-skills
+```
+
+After installing, restart Claude Code for the skills to load.
+
+**VS Code:**
+
+See [VS Code Agent Skills documentation](https://code.visualstudio.com/docs/copilot/customization/agent-skills#_use-shared-skills) for installation instructions.
+
+**Cursor:**
+
+See [Cursor Skills documentation](https://cursor.com/docs/skills#installing-skills-from-github) for installation instructions.
+
+## What the skill covers
+
+The `teams-dev` skill guides your AI assistant through:
+
+| Task                          | What it does                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| **Manage bot infrastructure** | Register your bot with Teams, manage credentials, and update configuration        |
+| **Develop Teams bot**         | Build bot applications from scratch or add Teams capabilities to existing servers |
+| **Set up SSO**                | Enable Single Sign-On so users can authenticate seamlessly without login prompts  |
+| **Troubleshoot**              | Diagnose and resolve common bot setup and configuration issues                    |
+
+The skill does **not** cover hosting or deployment — it focuses on bot registration, development, and configuration.
+
+## Invoke the skill
+
+**Using natural language:**
+
+- "I need a chatbot for my team's standup meetings"
+- "Help me build a Teams bot that can answer FAQs"
+- "My bot won't load in Teams, can you help?"
+- "Add the ability to get user profile information to my bot"
+
+The skill loads automatically when your agent detects a relevant request.
+
+**Direct invocation:**
+
+```
+/teams-dev
+```
+
+## Example session
+
+```
+You: Help me create a Teams bot that echoes what I'm saying back to me
+
+Agent: I'll create an echo bot for you.
+
+       [checks Teams Developer CLI installation and authentication]
+       [creates development tunnel: https://abc123.ngrok.io]
+       [runs teams app create with endpoint]
+       ✓ Bot registered, credentials saved to .env
+
+       [runs teams project new typescript echo-bot -t echo]
+       ✓ Bot code created in ./echo-bot
+
+       [installs dependencies and starts bot server]
+       ✓ Bot running at http://localhost:3978
+
+       Your bot is ready! Install it in Teams:
+       https://teams.microsoft.com/l/app/[app-id]
+```
+
+## Requirements
+
+- Teams Developer CLI installed (`npm install -g @microsoft/teams.cli`)
+- Node.js 22.12 or later
+- Microsoft 365 account with sideloading enabled
+
+---
+
+### PAGE: llms.txt
+
+# llms.txt
+
+The Teams SDK publishes [llms.txt](https://llmstxt.org) files, plain-text versions of the documentation optimized for AI coding assistants. Point your tool at the right file and it gets the context it needs to help you build Teams apps.
+
+## Available files
+
+### Root
+
+High-level SDK overview with links to reference guides.
+
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms.txt
+```
+
+:::tip
+Instead of manually providing URLs, you can install the [`teams-dev` agent skill](#agent-skills) which automatically gives your coding assistant the right context.
+:::
+
+### Per-language
+
+**TypeScript:**
+
+**Small** — navigation index, the assistant fetches individual pages as needed.
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms_typescript.txt
+```
+
+**Full** — complete documentation in a single file, best for tools with large context windows.
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms_typescript_full.txt
+```
+
+**Python:**
+
+**Small** — navigation index, the assistant fetches individual pages as needed.
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms_python.txt
+```
+
+**Full** — complete documentation in a single file, best for tools with large context windows.
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms_python_full.txt
+```
+
+**C#:**
+
+**Small** — navigation index, the assistant fetches individual pages as needed.
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms_csharp.txt
+```
+
+**Full** — complete documentation in a single file, best for tools with large context windows.
+```
+https://microsoft.github.io/teams-sdk/llms_docs/llms_csharp_full.txt
+```
+
+---
+
+### PAGE: 🎯 Microsoft 365 Agents Playground
+
+# 🎯 Microsoft 365 Agents Playground
+
+The Microsoft 365 Agents Playground is a local testing tool for agents built with the Teams SDK. It lets you chat with your agent, mock activities, and inspect requests and responses without sideloading into Teams.
+
+![Microsoft 365 Agents Playground showing the welcome page with a sidebar listing Personal Chat, Group Chat, and Teams Channels, and a 'Type a message' compose box at the bottom.](/screenshots/agents-playground-blank.png)
+
+## Install
+
+### Option 1: npm (recommended)
+
+```bash
+npm install -g @microsoft/m365agentsplayground
+```
+
+### Option 2: Standalone binary
+
+```bash
+winget install agentsplayground
+```
+
+For other platforms and full install options, see the [Microsoft Learn guide](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/test-with-toolkit-project).
+
+## Migrating from DevTools
+
+If your agent previously used `DevtoolsPlugin` from `@microsoft/teams.dev`, remove it from your `App` configuration. The Playground is a separate CLI tool and does not need a plugin in your code.
+
+You can also remove `@microsoft/teams.dev` from your `package.json` after deleting `DevtoolsPlugin`. The Playground is installed separately as a CLI tool, not as a project dependency.
+
+The Playground sends requests without a Bot Framework JWT, so your agent needs to accept unauthenticated requests on `/api/messages`.
+
+By default the SDK **rejects** unauthenticated requests, so a freshly scaffolded agent rejects every request the Playground sends and logs:
+
+:::warning
+No credentials configured and dangerouslyAllowUnauthenticatedRequests is not enabled. All incoming requests will be rejected. Configure client authentication to securely receive messages, or set dangerouslyAllowUnauthenticatedRequests: true for local development.
+:::
+
+To accept the Playground's requests during local development, enable unauthenticated requests on your app:
+
+**TypeScript:**
+
+```typescript title="src/index.ts"
+const app = new App({ dangerouslyAllowUnauthenticatedRequests: true });
+```
+
+**C#:**
+
+```json title="Properties/launchSettings.json"
+{
+  "profiles": {
+    "YourBot": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "AzureAd__DangerouslyAllowUnauthenticatedRequests": "true"
+      }
+    }
+  }
+}
+```
+
+**Python:**
+
+```python title="src/main.py"
+app = App(dangerously_allow_unauthenticated_requests=True)
+```
+
+:::warning
+Only enable unauthenticated requests for local development — never in production, as it disables inbound request authentication.
+:::
+
+### Why this is needed
+
+`DevtoolsPlugin` previously bypassed JWT validation implicitly because it ran in-process and never went through `/api/messages` over HTTP. The Playground sends real HTTP requests, so the bot's JWT validator runs unless unauthenticated requests are explicitly enabled.
+
+## Launch
+
+Start your agent locally (default port `3978`), then run:
+
+```bash
+agentsplayground -e http://localhost:3978/api/messages -c msteams
+```
+
+The playground opens at [http://localhost:56150](http://localhost:56150).
+
+### Common flags
+
+- `-e, --app-endpoint` — your agent's endpoint, e.g. `http://localhost:3978/api/messages`
+- `-c, --channel-id` — `emulator`, `webchat`, `msteams`, `directline`, or `agents`
+- `--client-id`, `--client-secret`, `--tenant-id` — credentials when your agent requires authentication
+- `-p, --port` — port for the playground UI (default `56150`)
+
+Run `agentsplayground --help` for the full list.
+
+## Test your agent
+
+Type a message in the compose box and send it. Your agent's reply renders inline.
+
+![Microsoft 365 Agents Playground showing a user message 'hello!' and an agent reply 'you said \"hello!\"'.](/screenshots/agents-playground-echo-chat.png)
+
+Use the **Mock an Activity** menu to send custom activity types (membership changes, invokes, message reactions, and more). Use the **Debug Options** menu to control delivery mode and logging. The **Log Panel** (toggle from the top right) shows the HTTP exchange between the playground and your agent.
+
+## Learn more
+
+- [Test your agent locally in Microsoft 365 Agents Playground](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/test-with-toolkit-project) — full Microsoft Learn guide
+- [Microsoft 365 Agents SDK](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/)
+
+---
+
+### PAGE: Exposing Your Local App with a Tunnel
+
+# Exposing Your Local App with a Tunnel
+
+Teams, Agent 365, and other webhook callers deliver requests from their own servers, not a browser — so your endpoint must be reachable on the public internet over HTTPS, even while developing on `localhost`. A **tunnel** gives your local server a public URL for exactly this: bots, message extensions, Agent 365 callbacks, and any other inbound webhook your app registers. Once you deploy to a real host, you don't need a tunnel.
+
+## Dev Tunnels (recommended)
+
+[Dev Tunnels](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) is Microsoft's tunneling service, built into Visual Studio, VS Code, and the Microsoft 365 Agents Toolkit. A **persistent tunnel** keeps the same hostname across restarts, so you register your endpoint once.
+
+**Install:**
+
+```bash
+# macOS / Linux
+brew install devtunnel
+
+# Windows (winget)
+winget install Microsoft.devtunnel
+```
+
+**Create a persistent, anonymous-access tunnel:**
+
+```bash
+devtunnel user login
+devtunnel create my-teams-app --allow-anonymous
+devtunnel port create my-teams-app -p 3978
+devtunnel host my-teams-app
+```
+
+Use the printed public URL (always HTTPS) as your `--endpoint`:
+
+```bash
+teams app create \
+  --name my-bot \
+  --endpoint https://my-teams-app-3978.usw2.devtunnels.ms/api/messages \
+  --env .env
+```
+
+## Alternatives
+
+[ngrok](https://ngrok.com/docs/getting-started) and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) work the same way: start a tunnel, get a public HTTPS URL, use it as your `--endpoint`. Fine substitutes if you're already using one — see their docs for setup.
+
+## Verifying the tunnel reaches your app
+
+```bash
+curl -i https://<your-tunnel-host>/api/messages
+```
+
+Any response from your app — even an error like `401` or `404` — confirms the tunnel is forwarding correctly; move on and test from Teams. No response or a `502` means transport is broken — see [Troubleshooting](#troubleshooting).
+
+## Persistent vs. ephemeral URLs
+
+A Dev Tunnels persistent tunnel (`devtunnel create <tunnel-id>`) keeps its hostname across restarts, so you register the endpoint once. ngrok's free tier assigns a new hostname every run, so you must re-register (`teams app update <id> --endpoint ...`) each time — and possibly reinstall the app in Teams if the client cached the old endpoint.
+
+:::warning `--allow-anonymous` makes the tunnel public
+Anyone with the URL can reach it — required so Teams (not a Dev Tunnels client) can call your endpoint. It doesn't replace app-level auth: keep JWT/activity validation on, and delete the tunnel (`devtunnel delete <tunnel-id>`) when you're done.
+:::
+
+## Managing a persistent Dev Tunnel
+
+```bash
+devtunnel host my-teams-app       # start (after the one-time create/port setup above)
+# Ctrl+C to stop
+
+devtunnel host my-teams-app       # reuse later — same command, same hostname
+devtunnel delete my-teams-app     # delete when no longer needed
+```
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+| --- | --- | --- |
+| `502 Bad Gateway` | Tunnel port protocol doesn't match your app | `devtunnel port delete my-teams-app -p 3978`, then `devtunnel port create my-teams-app -p 3978 --protocol http` |
+| Teams can't reach bot / install fails | Tunnel not hosting, or `--endpoint` doesn't match current URL | Confirm `devtunnel host` is running; re-check the registered endpoint |
+| Worked yesterday, not today | Hostname changed (ngrok) or host process stopped | Re-run the host command; re-register the endpoint if the hostname changed |
+| `curl` hangs or times out | Host process isn't running, or wrong port tunneled | Check the port your app actually logged on startup |
+| `curl` works, Teams doesn't | Transport is fine; likely an app-auth issue | See [Authentication Troubleshooting](/teams/app-authentication/troubleshooting) |
+
+## Related pages
+
+- Running in Teams: [TypeScript](/typescript/getting-started/running-in-teams) · [C#](/csharp/getting-started/running-in-teams) · [Python](/python/getting-started/running-in-teams) — end-to-end registration and sideload flow
+- [Local Tunnels (CLI reference)](/cli/concepts/local-tunnels) — the same setup via `teams app create`/`update`
+- [Teams Core Concepts](/teams/core-concepts) — where the tunnel fits among app registration and sideloading
+- [Azure Configuration](#azure-configuration) — pointing an Azure Bot resource's messaging endpoint at your tunnel
+
+---
+
+## CAT: essentials
+
+### PAGE: App Basics
+
+# App Basics
+
+The app is the main entry point for your agent. In **Teams SDK for .NET 2.1** it is a `TeamsBotApplication`, built on top of a standard ASP.NET Core web application. You register it at startup with `builder.Services.AddTeamsBotApplication()` and expose it as your bot's HTTP endpoint with `app.UseTeamsBotApplication()` — see the [quickstart](#quickstart) or [code basics](#code-basics) for the full setup.
+
+It is responsible for:
+
+1. Hosting and running the server (via ASP.NET Core / Kestrel)
+2. Serving incoming requests on `/api/messages` and routing them to your handlers
+3. Handling authentication for your agent to the Teams backend (via your `AzureAd` configuration)
+4. Providing helpful utilities which simplify interacting with the Teams platform (`context.SendAsync`, `context.ReplyAsync`, the API client, etc.)
+5. Letting you extend behavior with standard ASP.NET Core **middleware** and **dependency injection**
+
+```mermaid
+flowchart LR
+    %% Layout Definitions
+    direction LR
+
+    Teams
+
+    subgraph AppClass["ASP.NET Core App"]
+        Endpoint["/api/messages"]
+        subgraph Pipeline["TeamsBotApplication"]
+            direction TB
+            TurnMiddleware["Turn Middleware<br/>(ITurnMiddleware)"]
+            ActivityRouting["Activity Routing<br/>(OnMessage, OnEvent, ...)"]
+            Utilities["Utilities"]
+            Auth["Auth"]
+        end
+    end
+    ApplicationLogic["Your Handlers"]
+
+    %% Connections
+    Teams --> Endpoint
+    Endpoint --> TurnMiddleware
+    TurnMiddleware --> ActivityRouting
+    ActivityRouting --> ApplicationLogic
+    Auth --> ApplicationLogic
+    Utilities --> ApplicationLogic
+
+    %% Styling
+    style Teams fill:#2E86AB,stroke:#1B4F72,stroke-width:2px,color:#ffffff
+    style ApplicationLogic fill:#28B463,stroke:#1D8348,stroke-width:2px,color:#ffffff
+```
+
+## Core Components
+
+**Hosting (ASP.NET Core)**
+
+- Runs the web server (Kestrel) and exposes your bot at `/api/messages`
+- Managed with the standard host lifecycle (`IHostApplicationLifetime` for start/stop)
+
+**Activity Routing**
+
+- Routes incoming activities to the appropriate typed handler (`OnMessage`, `OnEvent`, `OnMembersAdded`, `OnInstall`, …)
+
+**Turn Middleware**
+
+- Cross-cutting logic that runs on every turn (logging, metrics, etc.)
+- Implement `ITurnMiddleware` and register it with `teams.UseMiddleware(...)`
+
+**Utilities**
+
+- Convenience methods for interacting with Teams (`context.SendAsync`, `context.ReplyAsync`, `context.TypingAsync`, the `context.Api` client, and streaming)
+
+**Auth**
+
+- Handles authenticating your agent with the Teams backend using your `AzureAd` configuration
+- Validates inbound tokens before any handler runs (see [Trust Model](#trust-model))
+
+**Dependency Injection**
+
+- Register your own services in `builder.Services` and inject them into handlers and middleware, just like any ASP.NET Core app
+
+:::note[SDK 2.0 (Legacy)]
+The SDK 2.0 model exposed the app as an `App` class with a **plugin architecture** — plugins sat both in front of the app (hosting it as a server) and behind it (reacting to activities being sent), and communicated through an event bus. The 2.1 **removes plugins** in favor of ASP.NET Core middleware and dependency injection. If you're upgrading from Bot Framework or 2.0 patterns, see the [BotBuilder migration guide](../migrations/botbuilder). The plugin-based model is still described below for the TypeScript and Python SDKs.
+:::
+
+The `App` class is the main entry point for your agent.
+
+It is responsible for:
+
+1. Hosting and running the server (via plugins)
+2. Serving incoming requests and routing them to your handlers
+3. Handling authentication for your agent to the Teams backend
+4. Providing helpful utilities which simplify the ability for your application to interact with the Teams platform
+5. Managing plugins which can extend the functionality of your agent
+
+```mermaid
+flowchart LR
+    %% Layout Definitions
+    direction LR
+
+    Teams
+
+    subgraph AppClass
+        CorePlugins["Plugins"]
+        Events["Events"]
+        subgraph AppResponsibilities
+            direction TB
+            ActivityRouting["Activity Routing"]
+            Utilities["Utilities"]
+            Auth["Auth"]
+        end
+        Plugins2["Plugins"]
+    end
+    ApplicationLogic["Application Logic"]
+
+    %% Connections
+    Teams --> CorePlugins
+    CorePlugins --> Events
+    Events --> ActivityRouting
+    ActivityRouting --> Plugins2
+    Plugins2 --> ApplicationLogic
+    Auth --> ApplicationLogic
+    Utilities --> ApplicationLogic
+
+    %% Styling
+    style Teams fill:#2E86AB,stroke:#1B4F72,stroke-width:2px,color:#ffffff
+    style ApplicationLogic fill:#28B463,stroke:#1D8348,stroke-width:2px,color:#ffffff
+```
+
+## Core Components
+
+**Plugins**
+
+- Can be used to set up the server
+- Can listen to messages or send messages out
+
+**Events**
+
+- Listens to events from core plugins
+- Emit interesting events to the application
+
+**Activity Routing**
+
+- Routes activities to appropriate handlers
+
+**Utilities**
+
+- Provides utility functions for convenience (like sending replies or proactive messages)
+
+**Auth**
+
+- Handles authenticating your agent with Teams, Graph, etc.
+- Simplifies the process of authenticating your app or user for your app
+
+**Plugins (Secondary)**
+
+- Can hook into activity handlers or proactive scenarios
+- Can modify or update agent activity events
+
+## Plugins
+
+You'll notice that plugins are present in the front, which exposes your application as a server, and also in the back after the app does some processing to the incoming message. The plugin architecture allows the application to be built in an extremely modular way. Each plugin can be swapped out to change or augment the functionality of the application. The plugins can listen to various events that happen (e.g. the server starting or ending, an error occuring, etc), activities being sent to or from the application and more. This allows the application to be extremely flexible and extensible.
+
+---
+
+### PAGE: Listening To Activities
+
+# Listening To Activities
+
+An **Activity** is the Teams‑specific payload that flows between the user and your bot.
+Where _events_ describe high‑level happenings inside your app, _activities_ are the raw Teams messages such as chat text, card actions, installs, or invoke calls.
+
+The Teams SDK exposes a fluent router so you can subscribe to these activities with `app.on('<route>', …)`.
+
+```mermaid
+flowchart LR
+    Teams["Teams"]:::less-interesting
+    Server["App Server"]:::interesting
+    ActivityRouter["Activity Router (app.on())"]:::interesting
+    Handlers["Your Activity Handlers"]:::interesting
+
+    Teams --> |Events| Server
+    Server --> |Activity Event| ActivityRouter
+    ActivityRouter --> |handler invoked| Handlers
+
+    classDef interesting fill:#b1650f,stroke:#333,stroke-width:4px;
+    classDef less-interesting fill:#666,stroke:#333,stroke-width:4px;
+```
+
+Here is an example of a basic message handler:
+
+```typescript
+app.on('message', async ({ activity, send }) => {
+  await send(`You said: ${activity.text}`);
+});
+```
+
+In the above example, the `activity` parameter is of type `MessageActivity`, which has a `text` property. You'll notice that the handler here does not return anything, but instead handles it by `send`ing a message back. For message activities, Teams does not expect your application to return anything (though it's usually a good idea to send some sort of friendly acknowledgment!).
+
+[Other activity types](./activity-ref) have different properties and different required results. For a given handler, the SDK will automatically determine the type of `activity` and also enforce the correct return type.
+
+## Slash Commands
+
+Slash commands are manifest-declared commands users run from the compose box. To enable slash commands, set `supportsTargetedMessages: true` in your app manifest (v1.29 or later) under the `bots` section. You can opt in with an explicit command list by declaring specific commands using `commandLists` with `triggers: ["slash"]`, which Teams shows in the slash menu when a user types `/`. Without a command list, users can still invoke your agent via `/agent-name` and provide free-form input.
+
+```json
+{
+  "bots": [
+    {
+      "botId": "{{BOT_ID}}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsTargetedMessages": true,
+      "commandLists": [
+        {
+          "scopes": ["team", "groupChat"],
+          "triggers": ["slash"],
+          "commands": [
+            { "title": "Review", "description": "Review a document" }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+When a user sends a slash command, it appears as a private message visible only to them. Your agent can reply privately or, when appropriate, share a response with the broader group or channel.
+
+Slash commands arrive as normal message activities with the targeted flag set on the activity's recipient object.
+
+```typescript
+napp.on('message', async ({ activity, send, next }) => {
+  if (activity.recipient?.isTargeted) {
+    await send(`Received slash command: ${activity.text}`);
+    return;
+  }
+
+  await next();
+});
+```
+
+## Activity handler chaining
+
+The `on` activity handlers follow a [middleware](https://www.patterns.dev/vanilla/mediator-pattern/) pattern similar to how `express` middlewares work. This means that for each activity handler, a `next` function is passed in which can be called to pass control to the next handler. This allows you to build a chain of handlers that can process the same activity in different ways.
+
+```typescript
+app.on('message', async ({ next }) => {
+  console.log('global logger');
+  next(); // pass control onward
+});
+```
+
+```typescript
+app.on('message', async ({ activity, next }) => {
+  if (activity.text === '/help') {
+    await send('Here are all the ways I can help you...');
+    return;
+  }
+
+  // Conditionally pass control to the next handler
+  next();
+});
+```
+
+```typescript
+app.on('message', async ({ activity }) => {
+  // Fallthrough to the final handler
+  await send(`Hello! you said ${activity.text}`);
+});
+```
+
+## Activity Reference
+
+For a list of supported activities that your application can listen to, see the [activity reference](./activity-ref).
+
+---
+
+### PAGE: Proactive Messaging
+
+# Proactive Messaging
+
+In [Sending Messages](./), you were shown how to respond to an event when it happens. However, there are times when you want to send a message to the user without them sending a message first. This is called proactive messaging. You can do this by using the `send` method on your app instance. This approach is useful for sending notifications or reminders to the user.
+
+The main thing to note is that you need to have the `conversationId` of the chat or channel that you want to send the message to. It's a good idea to store this value somewhere from an activity handler so that you can use it for proactive messaging later.
+
+```typescript
+
+// ...
+
+// This would be some persistent storage
+const myConversationIdStorage = new Map<string, string>();
+
+// Installation is just one place to get the conversation id. All activities
+// have the conversation id, so you can use any activity to get it.
+app.on('install.add', async ({ activity, send }) => {
+  // Save the conversation id in
+  myConversationIdStorage.set(activity.from.aadObjectId!, activity.conversation.id);
+
+  await send('Hi! I am going to remind you to say something to me soon!');
+  notificationQueue.addReminder(activity.from.aadObjectId!, sendProactiveNotification, 10_000);
+});
+```
+
+Then, when you want to send a proactive message, you can retrieve the `conversationId` from storage and use it to send the message.
+
+```typescript
+
+// ...
+
+const sendProactiveNotification = async (userId: string) => {
+  const conversationId = myConversationIdStorage.get(userId);
+  if (!conversationId) {
+    return;
+  }
+  const activity = new MessageActivityInput('Hey! It\'s been a while. How are you?');
+  await app.send(conversationId, activity);
+};
+```
+
+:::tip
+In this example, you see how to get the `conversationId` using one of the activity handlers. This is a good place to store the conversation id, but you can also do this in other places like when the user installs the app or when they sign in. The important thing is that you have the conversation id stored somewhere so you can use it later.
+:::
+
+## Targeted Proactive Messages
+
+Targeted messages, also known as ephemeral messages, are delivered to a specific user in a shared conversation. From a single user's perspective, they appear as regular inline messages in a conversation. Other participants won't see these messages.
+
+When sending targeted messages proactively, you must explicitly specify the recipient account.
+
+```typescript
+
+// When sending proactively, you must provide an explicit recipient account
+const sendTargetedNotification = async (conversationId: string, recipient: Account) => {
+  await app.send(
+    conversationId,
+    new MessageActivityInput('This is a private notification just for you!')
+      .withRecipient(recipient, true)
+  );
+};
+```
+
+## Proactive Threading
+
+The SDK sends messages into reply chains (threads) in channels and 1:1 chats.
+Whether a thread is shown depends on the service and the Teams client.
+The SDK sends a response from a handler through the reply chain route only when `channelData.replyChain.id` is present on the inbound activity.
+With no `replyChain`, the SDK skips that route and sends to the inbound conversation.
+In a channel, the suffix of that conversation id can still keep the response in the thread.
+
+In this guide, top-level means a message in the main chat or channel conversation, and in-thread means a message in a reply chain (thread).
+
+The `app` methods take explicit ids, so they work outside a handler.
+Given the id of the chat or channel (`channelData.chat.id` or `channelData.channel.id`), in 1:1 chats and channels they place the message as follows:
+
+| Method | 1:1 chat | Channel |
+|---|
