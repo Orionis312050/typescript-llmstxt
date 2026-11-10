@@ -1,0 +1,107 @@
+# Teams SDK - TypeScript Documentation (offline)
+
+> Offline edition of https://microsoft.github.io/teams-sdk/llms_docs/llms_typescript.txt (+ full content).
+> Every feature lives in its own file under `docs/<category>/`; all cross-references are relative links inside this repo — no external fetching needed.
+
+## Developer Tools
+
+- [Teams Developer CLI](docs/developer-tools/teams-developer-cli.md)
+- [Agent Skills](docs/developer-tools/agent-skills.md)
+- [🎯 Microsoft 365 Agents Playground](docs/developer-tools/microsoft-365-agents-playground.md)
+- [llms.txt](docs/developer-tools/llmstxt.md)
+- [Developer Tools](docs/developer-tools.md)
+- [Exposing Your Local App with a Tunnel](docs/developer-tools/exposing-your-local-app-with-a-tunnel.md)
+
+## Essentials
+
+- [App Basics](docs/essentials/app-basics.md)
+- [Sovereign Cloud Configuration](docs/essentials/app-configuration/sovereign-cloud-configuration.md)
+- [Listening To Activities](docs/essentials/listening-to-activities.md)
+- [Proactive Messaging](docs/essentials/sending-messages/proactive-messaging.md)
+- [Essentials](docs/essentials.md)
+- [Trust Model](docs/essentials/app-authentication/trust-model.md)
+- [Activity Type Reference](docs/essentials/on-activity/activity-type-reference.md)
+- [Listening To Events](docs/essentials/listening-to-events.md)
+- [Sending Messages](docs/essentials/sending-messages.md)
+- [Teams API Client](docs/essentials/teams-api-client.md)
+- [Graph API Client](docs/essentials/graph-api-client.md)
+- [App Authentication](docs/essentials/app-authentication.md)
+
+## Get Started
+
+- [Quickstart: Register your app](docs/get-started/quickstart-register-your-app.md)
+- [Quickstart: Build your first bot](docs/get-started/quickstart-build-your-first-bot.md)
+
+## Getting Started
+
+- [Quickstart](docs/getting-started/quickstart.md)
+- [Code Basics](docs/getting-started/code-basics.md)
+
+## In Depth Guides
+
+- [Adaptive Cards](docs/in-depth-guides/adaptive-cards.md)
+- [Building Adaptive Cards](docs/in-depth-guides/adaptive-cards/building-adaptive-cards.md)
+- [Set up Agentic Users](docs/in-depth-guides/agent-365/set-up-agentic-users.md)
+- [AI Integrations](docs/in-depth-guides/ai-integrations.md)
+- [Build an agent in Teams](docs/in-depth-guides/ai-integrations/build-an-agent-in-teams.md)
+- [Creating Dialogs](docs/in-depth-guides/dialogs/creating-dialogs.md)
+- [File and Image Handling](docs/in-depth-guides/file-and-image-handling.md)
+- [HTML Widgets](docs/in-depth-guides/html-widgets.md)
+- [Action commands](docs/in-depth-guides/message-extensions/action-commands.md)
+- [Middleware](docs/in-depth-guides/observability/middleware.md)
+- [Static Pages](docs/in-depth-guides/server/static-pages.md)
+- [Executing Functions](docs/in-depth-guides/tabs/functions/executing-functions.md)
+- [Getting started](docs/in-depth-guides/tabs/getting-started.md)
+- [Executing Actions](docs/in-depth-guides/adaptive-cards/executing-actions.md)
+- [Agentic Identity](docs/in-depth-guides/agentic-identity.md)
+- [Enhance the Teams Experience](docs/in-depth-guides/ai-integrations/enhance-the-teams-experience.md)
+- [Dialogs](docs/in-depth-guides/dialogs.md)
+- [Handling Dialog Submissions](docs/in-depth-guides/dialogs/handling-dialog-submissions.md)
+- [Receiving Files](docs/in-depth-guides/file-handling/receiving-files.md)
+- [Sending Widgets](docs/in-depth-guides/html-widgets/sending-widgets.md)
+- [🔍 Search commands](docs/in-depth-guides/message-extensions/search-commands.md)
+- [🧃 Custom Logger](docs/in-depth-guides/observability/custom-logger.md)
+- [Self-Managing Your Server](docs/in-depth-guides/server/self-managing-your-server.md)
+- [Using The App](docs/in-depth-guides/tabs/using-the-app.md)
+- [In-Depth Guides](docs/in-depth-guides.md)
+- [Receiving and sending messages](docs/in-depth-guides/agent-365/receiving-and-sending-messages.md)
+- [Exposing Teams to AI Agents (MCP)](docs/in-depth-guides/ai-integrations/exposing-teams-to-ai-agents-mcp.md)
+- [Handling Multi-Step Forms](docs/in-depth-guides/dialogs/handling-multi-step-forms.md)
+- [Receiving Inline Images](docs/in-depth-guides/file-handling/receiving-inline-images.md)
+- [Handling Tool Calls](docs/in-depth-guides/html-widgets/handling-tool-calls.md)
+- [📖 Message Extensions](docs/in-depth-guides/message-extensions.md)
+- [⚙️ Settings](docs/in-depth-guides/message-extensions/settings.md)
+- [App Options](docs/in-depth-guides/tabs/app-options.md)
+- [Agentic User lifecycle events](docs/in-depth-guides/agent-365/agentic-user-lifecycle-events.md)
+- [Bot-to-Bot Communication with A2A](docs/in-depth-guides/ai-integrations/bot-to-bot-communication-with-a2a.md)
+- [Feedback](docs/in-depth-guides/feedback.md)
+- [Sending Inline Images](docs/in-depth-guides/file-handling/sending-inline-images.md)
+- [Security Policy](docs/in-depth-guides/html-widgets/security-policy.md)
+- [🔗 Link unfurling](docs/in-depth-guides/message-extensions/link-unfurling.md)
+- [Microsoft Graph Client](docs/in-depth-guides/tabs/microsoft-graph-client.md)
+- [Observability and governance](docs/in-depth-guides/agent-365/observability-and-governance.md)
+- [Updating Model Context](docs/in-depth-guides/html-widgets/updating-model-context.md)
+- [Meeting Events](docs/in-depth-guides/meeting-events.md)
+- [Functions](docs/in-depth-guides/tabs/functions.md)
+- [Error Handling](docs/in-depth-guides/html-widgets/error-handling.md)
+- [Message Reactions](docs/in-depth-guides/message-reactions.md)
+- [Tabs](docs/in-depth-guides/tabs.md)
+- [🔒 User Authentication](docs/in-depth-guides/user-authentication.md)
+- [Microsoft 365 Extensions](docs/in-depth-guides/microsoft-365-extensions.md)
+- [State Management](docs/in-depth-guides/state-management.md)
+
+## Teams
+
+- [Client Secret Authentication Setup](docs/teams/app-authentication/client-secret-authentication-setup.md)
+- [Teams Core Concepts](docs/teams/teams-core-concepts.md)
+- [SSO Setup](docs/teams/user-authentication/sso-setup.md)
+- [User Assigned Managed Identity Authentication Setup](docs/teams/app-authentication/user-assigned-managed-identity-authentication-setup.md)
+- [SSO Troubleshooting](docs/teams/user-authentication/sso-troubleshooting.md)
+- [Teams Integration](docs/teams-integration.md)
+- [Federated Identity Credentials Setup](docs/teams/app-authentication/federated-identity-credentials-setup.md)
+- [Azure Configuration](docs/teams/azure-configuration.md)
+- [App Authentication Setup](docs/teams/app-authentication-setup.md)
+- [User Authentication](docs/teams/user-authentication.md)
+- [Teams Manifest](docs/teams/teams-manifest.md)
+- [Enabling in M365 Copilot](docs/teams/enabling-in-m365-copilot.md)
+- [Pick the right SDK for your Teams agent](docs/teams/pick-the-right-sdk-for-your-teams-agent.md)
