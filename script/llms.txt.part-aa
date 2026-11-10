@@ -742,7 +742,7 @@ When a user sends a slash command, it appears as a private message visible only 
 Slash commands arrive as normal message activities with the targeted flag set on the activity's recipient object.
 
 ```typescript
-napp.on('message', async ({ activity, send, next }) => {
+app.on('message', async ({ activity, send, next }) => {
   if (activity.recipient?.isTargeted) {
     await send(`Received slash command: ${activity.text}`);
     return;
