@@ -547,7 +547,7 @@ const app = new App({
 app.on('message', async ({ send, activity, log }) => {
   log.debug(activity);
   await send({ type: 'typing' });
-  await send(`you said \"${activity.text}\"`);
+  await send(`you said "${activity.text}"`);
 });
 
 (async () => {
@@ -835,7 +835,7 @@ Full source: [examples/mcp-server](https://github.com/microsoft/teams.ts/tree/ma
 
 ## Defining a tool
 
-An MCP tool is a function exposed by the server and discoverable by clients. The function signature defines the input schema, the return type defines the output schema, and the description tells the agent when to use it.
+An MCP tool is a function exposed by the server and discoverable by clients. The function signature defines the input schema, the return type defines the output, and the description tells the agent when to use it.
 
 Tools are registered on an `McpServer`. The sample wraps `registerTool` in a small `structuredTool` helper so handlers can return a plain typed value that's serialized to MCP's structured-content shape. Input and output schemas are described with [Zod](https://zod.dev/).
 
