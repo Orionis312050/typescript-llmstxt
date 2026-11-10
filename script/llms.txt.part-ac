@@ -1,0 +1,716 @@
+first chunk is logged, and `stream.emit()` does not throw it.
+
+`stream` in a handler is created with this placement already applied.
+The `StreamOptions` type, with `replyChain:  chatOrChannelId, replyChainId `, is what `IActivitySender.createStream(ref, options)` accepts when you implement a custom sender, and it is experimental.
+The stream falls back to the inbound conversation on a 404 only when `ref.conversation.conversationType` is `channel`.
+
+## @Mention
+
+Sending a message at `@mentions` a user is as simple including the details of the user using the `addMention` method
+
+```typescript
+
+app.on('message', async ({ send, activity }) => {
+  await send(new MessageActivityInput('hi!').addMention(activity.from));
+});
+```
+
+## Targeted Messages
+
+Targeted messages, also known as ephemeral messages, are delivered to a specific user in a shared conversation. From a single user's perspective, they appear as regular inline messages in a conversation. Other participants won't see these messages, making them useful for authentication flows, help or error responses, personal reminders, or sharing contextual information without cluttering the group conversation.
+
+To send a targeted message when responding to an incoming activity, use the `withRecipient` method with the recipient account and set the targeting flag to true.
+
+```typescript
+
+app.on('message', async ({ send, activity }) => {
+  // Using withRecipient with isTargeted=true explicitly targets the specified recipient
+  await send(
+    new MessageActivityInput('This message is only visible to you!')
+      .withRecipient(activity.from, true)
+  );
+});
+```
+
+### Prompt Preview
+
+:::info[Coming Soon]
+Prompt Preview is coming soon in June 2026.
+:::
+
+Prompt Preview shows a compact, collapsible preview of the targeted message your agent is replying to, helping carry context from a private user-to-agent message into the reply.
+
+#### Prompt Preview in targeted reply
+
+In a targeted (private) reply, both the prompt preview and the bot response are visible only to the targeted user.
+
+![Prompt Preview in a targeted reply.](/screenshots/private-prompt-preview.png)
+
+#### Prompt Preview in public reply
+
+In a public reply, the same prompt preview appears above the bot response and is visible to everyone in the conversation.
+
+![Prompt Preview in a public reply.](/screenshots/public-prompt-preview.png)
+
+In reactive scenarios, when replying to an inbound targeted activity through `send()` or `reply()`, the SDK automatically includes targeted message info.
+
+For proactive scenarios (using `app.send()`), attach targeted message info using the targeted message ID you are replying to.
+
+```typescript
+
+const targetedMessageId = '1772050244572';
+const conversationId = '19:groupchat-id@thread.v2';
+const userAccount: Account = {
+  id: '29:1AbCDef...',
+  name: 'Adele Vance',
+};
+
+const targetedMessage = new MessageActivityInput('Here is the result!')
+  .addTargetedMessageInfo(targetedMessageId)
+  .withRecipient(userAccount, true);
+
+// Targeted reply (only the user sees it)
+await app.send(conversationId, targetedMessage);
+
+// OR public reply (everyone sees it)
+const publicMessage = new MessageActivityInput('Here is the result!')
+  .addTargetedMessageInfo(targetedMessageId);
+await app.send(conversationId, publicMessage);
+```
+
+## Reactions
+
+Reactions allow your agent to add or remove emoji reactions on messages in a conversation, and to receive reactions added by users. See the [Message Reactions guide](#message-reactions) for full coverage.
+
+## Threading
+
+In Teams channels and 1:1 agent chats, the SDK can send messages into reply chains (threads).
+The SDK provides helpers to simplify working with threads.
+
+In this guide, top-level means a message in the main chat or channel conversation, and in-thread means a message in a reply chain (thread).
+
+Where a message lands depends on the method and the scope:
+
+| Method | 1:1 chat | Channel |
+|---|---|---|
+| `context.send()` | Matches level of user's message | In-thread |
+| `context.reply()` | Matches level of user's message | In-thread |
+
+The SDK places a response in a reply chain only when `channelData.replyChain.id` is present on the inbound activity.
+With no `replyChain`, these methods send to the inbound conversation.
+
+The reply method, `context.reply()`, also quotes the user's message.
+To reply in-thread to a top-level message in a 1:1 chat, or to send a top-level message from inside a thread, see [Proactive Messaging](#proactive-messaging).
+
+### Reactive Threading (Within a Handler)
+
+When your agent receives a message in a reply chain (thread), the context sends into that same reply chain.
+In a channel, replying to a top-level post also sends into that post's thread.
+In a 1:1 chat, a response to a top-level message is also top-level, and a thread is started explicitly with a proactive reply (see below).
+Use `send()` to send reactively without quoting, or `reply()` to send a reactive, quoted reply.
+In a channel the answer is in the same thread, and in a 1:1 chat it matches the level of the inbound message.
+
+```typescript
+app.on('message', async ({ send, reply }) => {
+  // Send reactively without quoting.
+  // In a channel, sends in the same thread.
+  // In a 1:1 chat, matches the level of the inbound message.
+  await send('Acknowledged');
+
+  // Send a reactive, quoted reply.
+  // In a channel, sends in the same thread.
+  // In a 1:1 chat, matches the level of the inbound message.
+  await reply('Got it!');
+});
+```
+
+#### Where the SDK takes the destination from
+
+The SDK reads `channelData` on the inbound activity to find the destination and does not parse the conversation id.
+To tell a channel from a chat, it also uses `conversation.conversationType`: `channel` selects the channel rules below, and anything else selects the chat rules.
+
+- **Channel:** a response to a `message` is sent through the reply chain `channelData.replyChain.id` of the channel `channelData.channel.id`.
+  If the reply chain route answers HTTP `404`, the SDK sends to the inbound conversation instead.
+  For a channel message, the inbound conversation id already identifies the same thread, so the response stays in it.
+  The SDK checks only the status code.
+- **1:1 chat:** when the inbound activity is inside a thread (see the table below), the response is sent through the reply chain `channelData.replyChain.id` of the chat `channelData.chat.id`.
+  Otherwise it is sent to the inbound conversation, at the top level.
+  An error from the reply chain route is thrown to your handler, and the response is not sent anywhere else.
+- **Missing ids:** when `channelData.replyChain`, or the id of the scope (`channelData.chat.id` in a 1:1 chat, `channelData.channel.id` in a channel), is missing, the SDK does not use the reply chain route and sends to the inbound conversation.
+  In a channel, the inbound conversation id can still keep the response in the thread.
+
+Typing indicators sent with `send()` are not placed.
+Only message responses are.
+
+#### Responding to edits, reactions and card actions
+
+In a 1:1 chat the SDK also places a response to an inbound activity that is not a typed message.
+It compares `channelData.replyChain.id` with the id of the message the activity acts on, and the activity is inside a thread when they differ.
+
+| Inbound activity | Message it acts on | Inside a thread when |
+|---|---|---|
+| `message` typed by the user | The message, `activity.id` | `replyChain.id` differs from `activity.id` |
+| `messageUpdate`, `messageDelete` | The edited or deleted message, `activity.id` | `replyChain.id` differs from `activity.id` |
+| `messageReaction` | The reacted message, `replyToId` | `replyToId` is a plain number other than `0` that differs from `replyChain.id` |
+| `message` with `channelData.source`, sent by a card button (`messageBack`, `Action.Submit`) | The message with the card, `replyToId` | `replyToId` is a plain number other than `0` that differs from `replyChain.id` |
+| `invoke` with `value.messagePayload` (a message action) | The message the action ran on, `value.messagePayload.id` | That id is a plain number other than `0` that differs from `replyChain.id` |
+| Any other `invoke` with a `replyToId`, such as `adaptiveCard/action` from `Action.Execute`, `task/fetch` and `task/submit` from a card button, or `message/submitAction` feedback | The message with the card or feedback buttons, `replyToId` | `replyToId` is a plain number other than `0` that differs from `replyChain.id` |
+| `invoke` with neither, such as a compose box action or sign-in | None | `replyChain.id` is present |
+| Any other activity, such as `installationUpdate` or `conversationUpdate` | None | Never |
+
+So a response to a card button clicked on a top-level message is top-level, and a response to a card button clicked on a card inside a thread is sent into that thread.
+A `replyToId` that is not a plain number, such as an encrypted id, is never inside a thread.
+
+The SDK uses `conversation.conversationType` only to tell a channel from a chat.
+In a chat it does not require a particular type to place a response.
+In the 1:1 chat of an agentic user, card button clicks (`messageBack`, `Action.Submit`, `Action.Execute`) and the `task/fetch` and `task/submit` invokes they open have arrived with `conversationType` set to `groupChat`, a service issue that is being corrected.
+The SDK places the response to them from `channelData` like any other activity, so a response to a click inside a thread is sent into that thread.
+
+In a channel only a `message` is placed, and a card button click that arrives as a `message` is placed like any other.
+The SDK sends a response to any other activity in a channel to the inbound conversation.
+
+For proactive threading (sending to a thread outside of a handler), see [Proactive Messaging](#proactive-messaging).
+
+#### Experimental status
+
+The reply chain types and operations are marked `@experimental` (diagnostic `ExperimentalTeamsThreading`) in the API reference.
+The marker is documentation only, with no compiler or runtime warning.
+It covers `channelData.chat`, `channelData.replyChain` and `channelData.source`, `api.conversations.createReplyChainActivity` and `createTargetedReplyChainActivity` (and `createReplyChain` and `createTargetedReplyChain` on `ConversationActivityClient`), `ActivitySenderOptions.replyChainId` and `StreamOptions`.
+`send`, `reply` and `app.reply` are not marked.
+
+## Quoted Replies
+
+Quoted replies let your agent reference a previous message in the conversation. When a user sends a message that quotes another message, your agent receives structured metadata about the quoted content. Your agent can also send messages that quote previous messages.
+
+### Receiving Quoted Replies
+
+When a user quotes a message and sends it to your agent, the quoted reply metadata is available on the inbound activity. Use the `getQuotedMessages()` method to access all quoted reply entities.
+
+```typescript
+app.on('message', async ({ activity, reply }) => {
+  const quotes = activity.getQuotedMessages();
+
+  if (quotes.length > 0) {
+    const quote = quotes[0].quotedReply;
+    await reply(
+      `You quoted message ${quote.messageId} from ${quote.senderName}: "${quote.preview}"`
+    );
+  }
+});
+```
+
+Each quoted reply entity contains the quoted message's ID, sender information, a preview of the quoted text, and whether the quoted message has been deleted.
+
+### Sending a Quoted Reply
+
+When your agent calls `reply()`, the SDK automatically stamps a quoted reply entity referencing the inbound message when its id is a plain message id. The reply will appear as a quoted reply in Teams.
+
+This applies when `activity.id` is a plain numeric message id, as it is for messages, edits and deletes.
+Otherwise, for example a card button click or another invoke with an id like `f:<guid>`, the SDK does not quote, and the response is sent like `send()`, without a quote.
+To quote in a card or invoke handler, quote the message that holds the card with `quote()` and its `replyToId`.
+
+```typescript
+app.on('message', async ({ reply }) => {
+  // reply() automatically quotes the inbound message
+  await reply('Got it!');
+});
+```
+
+To quote a different message in the same conversation (not the inbound message), use the `quote()` method with the message ID you want to quote.
+
+```typescript
+app.on('message', async ({ quote }) => {
+  // Quote a specific message by its ID
+  const parentMessageId = '1772050244572';
+  await quote(parentMessageId, 'Referencing an earlier message');
+});
+```
+
+### Building Quoted Replies for Proactive Send
+
+For proactive scenarios (using `app.send()`) or when quoting multiple messages, use the `addQuote()` method on a message activity. Pass the message ID and an optional response text.
+
+```typescript
+
+const parentMessageId = '1772050244572';
+const firstMessageId = '1772050244573';
+const secondMessageId = '1772050244574';
+
+// Single quote with response below it
+let msg = new MessageActivityInput()
+  .addQuote(parentMessageId, 'Here is my response');
+await app.send(conversationId, msg);
+
+// Multiple quotes with interleaved responses
+msg = new MessageActivityInput()
+  .addQuote(firstMessageId, 'response to first')
+  .addQuote(secondMessageId, 'response to second');
+await app.send(conversationId, msg);
+
+// Grouped quotes — omit response to group quotes together
+msg = new MessageActivityInput('see below for previous messages')
+  .addQuote(firstMessageId)
+  .addQuote(secondMessageId, 'response to both');
+await app.send(conversationId, msg);
+```
+
+---
+
+### PAGE: Teams API Client
+
+# Teams API Client
+
+Teams has a number of areas that your application has access to via its API. These are all available via the `app.api` object. Here is a short summary of the different areas:
+
+| Area            | Description                                                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `conversations` | Gives your application the ability to perform activities on conversations (send, update, delete messages, etc.), or create conversations (like 1:1 chat with a user) |
+| `meetings`      | Gives your application access to meeting details and participant information via `getById` and `getParticipant`                                                       |
+| `teams`         | Gives your application access to team or channel details                                                                                                             |
+
+An instance of the API client is passed to handlers that can be used to fetch details:
+
+## Example
+
+In this example, we use the API client to fetch the members in a conversation. The `api` object is passed to the activity handler in this case.
+
+```typescript
+app.on('message', async ({ activity, api }) => {
+  const members = await api.conversations.getMembers(activity.conversation.id);
+});
+```
+
+## Proactive API
+
+It's also possible to access the API client from outside a handler via the app instance. Here we have the same example as above, but we're access the API client via the app instance.
+
+```typescript
+
+const res = await app.api.graph.call(endpoints.chats.getAllMessages.get);
+```
+
+## Meetings Example
+
+In this example, we use the API client to get a specific meeting participant's details, such as their role (e.g. Organizer) and whether they are currently in the meeting. Provide the user's AAD Object ID to specify which participant to look up. The `meetingId` and `tenantId` are available from the activity's channel data.
+
+:::note
+To retrieve **all** members of a meeting, use the conversations API as shown in the [example above](#example), since meetings are also conversations.
+:::
+
+```typescript
+app.on('meetingStart', async ({ activity, api }) => {
+  const meetingId = activity.channelData?.meeting?.id;
+  const tenantId = activity.channelData?.tenant?.id;
+  const userId = activity.from?.aadObjectId;
+
+  if (meetingId && tenantId && userId) {
+    const participant = await api.meetings.getParticipant(meetingId, userId, tenantId);
+    // participant.meeting?.role — "Organizer", "Presenter", "Attendee"
+    // participant.meeting?.inMeeting — true/false
+  }
+});
+```
+
+Visit [Meeting Events](#meeting-events) to learn more about meeting events.
+
+---
+
+### PAGE: Graph API Client
+
+# Graph API Client
+
+[Microsoft Graph](https://docs.microsoft.com/en-us/graph/overview) gives you access to the wider Microsoft 365 ecosystem. You can enrich your application with data from across Microsoft 365.
+
+The SDK gives your application easy access to the Microsoft Graph API via the `@microsoft/teams.graph`, `@microsoft/teams.graph-endpoints` and `@microsoft/teams.graph-endpoints-beta` packages.
+
+:::note
+If you're migrating from an earlier preview version of the Teams SDK, please see the [migration guide](../migrations/v2-previews) for details on breaking changes.
+:::
+
+## Package overview
+
+The Graph API surface is vast, and this is reflected in the size of the endpoints packages. To help you manage the size of your product, we made sure that the endpoints code is tree-shakable. We also made most of the code into an optional dependency, in case tree-shaking is not supported in your environment.
+
+| Package                                 | Optional | Contains                                                                            |
+| --------------------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| `@microsoft/teams.graph`                | No       | A tiny client to create and issue Graph HTTP requests.                              |
+| `@microsoft/teams.graph-endpoints`      | Yes      | Request-builder functions and types to call any of the production ready Graph APIs. |
+| `@microsoft/teams.graph-endpoints-beta` | Yes      | Same, but for Graph APIs still in preview.                                          |
+
+To use this SDK to call Graph APIs, the first step is to install the optional endpoints package using your favorite package manager. For instance:
+
+```sh
+npm install @microsoft/teams.graph-endpoints
+```
+
+## Calling APIs
+
+Microsoft Graph can be accessed by your application using its own application token, or by using the user's token. If you need access to resources that your application may not have, but your user does, you will need to use the user's scoped graph client. To grant explicit consent for your application to access resources on behalf of a user, follow the [auth guide](#user-authentication).
+
+To access the graph using the Graph using the app, you may use the `app.graph` object to call the endpoint of your choice.
+
+```typescript
+
+// Equivalent of https://learn.microsoft.com/en-us/graph/api/user-get
+// Gets the details of the bot-user
+app.graph.call(endpoints.me.get).then((user) => {
+  console.log(`User ID: ${user.id}`);
+  console.log(`User Display Name: ${user.displayName}`);
+  console.log(`User Email: ${user.mail}`);
+  console.log(`User Job Title: ${user.jobTitle}`);
+});
+```
+:::tip
+You also have access to the `appGraph` object in the activity handler. This is equivalent to `app.graph`.
+:::
+
+You can also access the graph using the user's token from within a message handler.
+
+**SDK 2.0 (Legacy):**
+
+```typescript
+
+// Gets details of the current user
+app.on('message', async ({ activity, userGraph }) => {
+  const me = await userGraph.call(endpoints.me.get);
+  console.log(`User ID: ${me.id}`);
+  console.log(`User Display Name: ${me.displayName}`);
+  console.log(`User Email: ${me.mail}`);
+  console.log(`User Job Title: ${me.jobTitle}`);
+});
+```
+Here, the "userGraph" object is a scoped graph client for the user that sent the message.
+
+**SDK 2.1 (current):**
+
+Build the client from an OAuth flow's token, so it's always scoped to the connection that owns it.
+
+```typescript
+
+const graph = app.addOAuthFlow('graph');
+
+// Gets details of the current user
+app.on('message', async (ctx) => {
+  const token = await graph.signIn(ctx);
+  if (!token) return; // OAuth card sent — resumes on the callback turn
+
+  const client = new GraphClient({ token: () => token }, { baseUrlRoot: app.graphBaseUrl });
+  const me = await client.call(endpoints.me.get);
+  console.log(`User ID: ${me.id}`);
+  console.log(`User Display Name: ${me.displayName}`);
+  console.log(`User Email: ${me.mail}`);
+  console.log(`User Job Title: ${me.jobTitle}`);
+});
+```
+
+## The Graph Client
+
+The Graph Client provides a straight-forward `call` method to interact with Microsoft Graph and issue requests scoped to a specific user or application. Paired with the Graph Endpoints packages, it offers discoverable and type-safe access to the vast Microsoft Graph API surface.
+
+Having an understanding of [how the graph API works](https://learn.microsoft.com/en-us/graph/use-the-api) will help you make the most of the SDK. For example, to get the `id` of the chat instance between a user and an app, [Microsoft Graph](https://learn.microsoft.com/en-us/graph/api/userscopeteamsappinstallation-get-chat?view=graph-rest-1.0&tabs=http) exposes it via:
+
+```
+GET /users/{user-id | user-principal-name}/teamwork/installedApps/{app-installation-id}/chat
+```
+
+The equivalent using the graph client would look like this:
+
+```ts
+
+const chat = await client.call(users.teamwork.installedApps.chat.get, {
+  'user-id': user.id,
+  'userScopeTeamsAppInstallation-id': appInstallationId,
+  $select: ['id'],
+});
+```
+
+Graph APIs often accept arguments that may go into the URL path, the query string, or the request body. As illustrated in this example, all arguments are provided as a second parameter to the `graph.call` method. The graph client puts each value in its place and attaches an authentication token as the request is constructed, and performs the fetch request for you.
+
+## Graph Preview APIs
+
+The Graph Preview APIs are not recommended for production use. However, if you have a need to explore preview APIs, the `@microsoft/teams.graph-endpoints-beta` package makes it easy.
+
+First, install the optional dependency:
+
+```sh
+npm install @microsoft/teams.graph-endpoints-beta
+```
+
+Then use it just like the regular `@microsoft/teams.graph-endpoints` package.
+
+```ts
+
+// Gets the current user details from /beta/me, rather than from /v1.0/me.
+const me = await app.graph.call(endpointsBeta.me.get);
+```
+
+The key differences between `@microsoft/teams.graph-endpoints` and `@microsoft/teams.graph-endpoints-beta` are that they represent different Graph API schemas, and that the `graph.call()` method knows to route the request to either /v1.0 or /beta. This means that it's possible to mix'n'match v1.0 and beta endpoints, for instance to explore a novel beta API in a code base that's already relying on v1.0 for all stable APIs.
+
+## Custom Graph API calls
+
+It's possible to craft custom builder functions that work just like the ones provided in the `@microsoft/teams.graph-endpoints` and `@microsoft/teams.graph-endpoints-beta` packages. This can be handy if you wish to provide narrower return types, call some novel API that is supported by the Graph backend but not yet included in the endpoints packages, or avoid taking a dependency on the endpoints packages altogether.
+
+For instance, this will `GET https://graph.microsoft.com/beta/me?$select=displayName` and return an object typed to contain just `displayName`, without taking a dependency on the endpoints packages.
+
+```ts
+
+const getMyDisplayName = (): EndpointRequest<{ displayName: string }> => ({
+  ver: 'beta', // use the beta endpoint; defaults to 'v1.0' if omitted
+  method: 'get', // HTTP method to use
+  path: '/me', // endpoint path
+  paramDefs: {
+    query: ['$select'], // the $select parameter goes in the query string
+  },
+  params: {
+    $select: ['displayName'], // the attribute(s) to select
+  },
+});
+
+const { displayName } = await app.graph.call(getMyDisplayName);
+```
+
+## Additional resources
+
+Microsoft Graph offers an extensive and thoroughly documented API surface. These essential resources will serve as your go-to references for any Graph development work:
+
+- The [Microsoft Graph Rest API reference documentation](https://learn.microsoft.com/en-us/graph/api/overview) gives details for each API, including permissions requirements.
+- The [Microsoft Graph REST API beta endpoint reference](https://learn.microsoft.com/en-us/graph/api/overview?view=graph-rest-beta) gives similar information for preview APIs.
+- The [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer) lets you discover and test drive APIs.
+
+In addition, the following endpoints may be especially interesting to Teams developers:
+
+| Graph endpoints                                                                                                                | Description                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| [appCatalogs](https://learn.microsoft.com/en-us/graph/api/appcatalogs-list-teamsapps?view=graph-rest-1.0)                      | Apps in the Teams App Catalog                                       |
+| [appRoleAssignments](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-list-approleassignments?view=graph-rest-1.0) | App role assignments                                                |
+| [applicationTemplates](https://learn.microsoft.com/en-us/graph/api/resources/applicationtemplate?view=graph-rest-1.0)          | Applications in the Microsoft Entra App Gallery                     |
+| [applications](https://learn.microsoft.com/en-us/graph/api/resources/application?view=graph-rest-1.0)                          | Application resources                                               |
+| [chats](https://learn.microsoft.com/en-us/graph/api/chat-list?view=graph-rest-1.0&tabs=http)                                   | Chat resources between users                                        |
+| [communications](https://learn.microsoft.com/en-us/graph/api/application-post-calls?view=graph-rest-1.0)                       | Calls and Online meetings                                           |
+| [employeeExperience](https://learn.microsoft.com/en-us/graph/api/resources/engagement-api-overview?view=graph-rest-1.0)        | Employee Experience and Engagement                                  |
+| [me](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0&tabs=http)                                       | Same as `/users` but scoped to one user (who is making the request) |
+| [teams](https://learn.microsoft.com/en-us/graph/api/resources/team?view=graph-rest-1.0)                                        | Team resources in Microsoft Teams                                   |
+| [teamsTemplates](https://learn.microsoft.com/en-us/microsoftteams/get-started-with-teams-templates)                            | Templates used to create teams                                      |
+| [teamwork](https://learn.microsoft.com/en-us/graph/api/resources/teamwork?view=graph-rest-1.0)                                 | A range of Microsoft Teams functionalities                          |
+| [users](https://learn.microsoft.com/en-us/graph/api/resources/users?view=graph-rest-1.0)                                       | User resources                                                      |
+
+---
+
+### PAGE: App Authentication
+
+# App Authentication
+
+Your application needs to authenticate to send messages to Teams as your bot. Authentication allows your app service to certify that it is _allowed_ to send messages as your Azure Bot.
+
+:::info Azure Setup Required
+Before configuring your application, you must first set up authentication in Azure. See the [App Authentication Setup](#app-authentication) guide for instructions on creating the necessary Azure resources.
+:::
+
+## Authentication Methods
+
+There are 3 main ways of authenticating:
+
+1. **Client Secret** - Simple password-based authentication using a client secret
+2. **User Assigned Managed Identity** - Passwordless authentication using Azure managed identities
+3. **Federated Identity Credentials** - Advanced identity federation using managed identities
+
+## Configuration Reference
+
+The Teams SDK automatically detects which authentication method to use based on the environment variables you set:
+
+| CLIENT_ID | CLIENT_SECRET | MANAGED_IDENTITY_CLIENT_ID | Authentication Method |
+|-|-|-|-|
+| not_set | | | No-Auth (local development only) |
+| set | set | | Client Secret |
+| set | not_set | | User Assigned Managed Identity |
+| set | not_set | set (same as CLIENT_ID) | User Assigned Managed Identity |
+| set | not_set | set (different from CLIENT_ID) | Federated Identity Credentials (UMI) |
+| set | not_set | "system" | Federated Identity Credentials (System Identity) |
+
+:::info[SDK 2.1]
+SDK 2.1 uses MSAL with standard ASP.NET Core configuration. Developers can authenticate their bot with any supported Microsoft Entra authentication solution by configuring the app according to the [`Microsoft.Identity.Web` credential format](https://learn.microsoft.com/en-us/entra/msidweb/authentication/credentials-overview#configure-credentials-in-appsettingsjson).
+:::
+
+## Client Secret
+
+The simplest authentication method using a password-like secret.
+
+### Setup
+
+First, complete the [Client Secret Setup](/teams/app-authentication/client-secret) in Azure Portal or Azure CLI.
+
+### Configuration
+
+Set the following environment variables in your application:
+
+- `CLIENT_ID`: Your Application (client) ID
+- `CLIENT_SECRET`: The client secret value you created
+- `TENANT_ID`: The tenant id where your bot is registered
+
+```env
+CLIENT_ID=your-client-id-here
+CLIENT_SECRET=your-client-secret-here
+TENANT_ID=your-tenant-id
+```
+
+The SDK will automatically use Client Secret authentication when both `CLIENT_ID` and `CLIENT_SECRET` are provided.
+
+## User Assigned Managed Identity
+
+Passwordless authentication using Azure managed identities - no secrets to rotate or manage.
+
+### Setup
+
+First, complete the [User Assigned Managed Identity Setup](/teams/app-authentication/user-managed-identity) in Azure Portal or Azure CLI.
+
+### Configuration
+
+Your application should automatically use User Assigned Managed Identity authentication when you provide the `CLIENT_ID` environment variable without a `CLIENT_SECRET`.
+
+Set the following environment variables in your application:
+
+- `CLIENT_ID`: Your Application (client) ID
+- **Do not set** `CLIENT_SECRET`
+- `TENANT_ID`: The tenant id where your bot is registered
+
+```env
+CLIENT_ID=your-client-id-here
+# Do not set CLIENT_SECRET
+TENANT_ID=your-tenant-id
+```
+
+## Federated Identity Credentials
+
+Advanced identity federation allowing you to assign managed identities directly to your App Registration.
+
+### Setup
+
+First, complete the [Federated Identity Credentials Setup](/teams/app-authentication/federated-identity-credentials) in Azure Portal or Azure CLI.
+
+### Configuration
+
+Depending on the type of managed identity you select, set the environment variables accordingly.
+
+**For User Assigned Managed Identity:**
+
+Set the following environment variables:
+- `CLIENT_ID`: Your Application (client) ID
+- `MANAGED_IDENTITY_CLIENT_ID`: The Client ID for the User Assigned Managed Identity resource
+- **Do not set** `CLIENT_SECRET`
+- `TENANT_ID`: The tenant id where your bot is registered
+
+```env
+CLIENT_ID=your-app-client-id-here
+MANAGED_IDENTITY_CLIENT_ID=your-managed-identity-client-id-here
+# Do not set CLIENT_SECRET
+TENANT_ID=your-tenant-id
+```
+
+**For System Assigned Identity:**
+
+Set the following environment variables:
+- `CLIENT_ID`: Your Application (client) ID
+- `MANAGED_IDENTITY_CLIENT_ID`: `system`
+- **Do not set** `CLIENT_SECRET`
+- `TENANT_ID`: The tenant id where your bot is registered
+
+```env
+CLIENT_ID=your-app-client-id-here
+MANAGED_IDENTITY_CLIENT_ID=system
+# Do not set CLIENT_SECRET
+TENANT_ID=your-tenant-id
+```
+
+## Troubleshooting
+
+If you encounter authentication errors, see the [Authentication Troubleshooting](/teams/app-authentication/troubleshooting) guide for common issues and solutions.
+
+---
+
+## CAT: get-started
+
+### PAGE: Quickstart: Register your app
+
+# Quickstart: Register your app
+
+Register a Teams app and its bot infrastructure with the [Teams Developer CLI](/cli/) (`@microsoft/teams.cli`). At the end you'll have a running agent installed in Teams.
+
+If you don't have an agent yet, step 3 scaffolds one using the Teams SDK. If you already have a server, skip step 3 and pass your endpoint to step 4.
+
+:::tip Let your AI assistant do this for you
+Install the [`teams-dev` skill](#agent-skills) in Claude Code, GitHub Copilot, Cursor, or VS Code, then say _"create a Teams bot"_ — your assistant runs every step on this page for you, including the tunnel setup and sideload link.
+:::
+
+## Prerequisites
+
+- Node.js 22.12 or later
+- An M365 account with **custom app upload (sideloading) enabled** on the tenant. Step 2 will check this.
+- A public HTTPS tunnel pointing at your local server (e.g. [DevTunnels](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview), [ngrok](https://ngrok.com/)). Start it before step 4 — see [Local Tunnels](/developer-tools/local-tunnels) if you need setup steps.
+
+## 1. Install the CLI
+
+```bash
+npm install -g @microsoft/teams.cli
+teams --version
+```
+
+## 2. Log in
+
+```bash
+teams login
+teams status
+```
+
+`teams status` should show `Sideloading: enabled`. If it shows `disabled`, your tenant admin needs to enable [custom app upload](https://learn.microsoft.com/en-us/microsoftteams/teams-custom-app-policies-and-settings) before you can install your bot.
+
+## 3. Scaffold a project
+
+Skip this step if you're bringing your own server endpoint.
+
+**TypeScript:**
+
+```bash
+teams project new typescript echo-bot
+cd echo-bot
+```
+
+**C#:**
+
+```bash
+teams project new csharp echo-bot
+cd Echo.Bot/Echo.Bot
+```
+
+**Python:**
+
+```bash
+teams project new python echo-bot
+cd echo-bot
+```
+
+The default template is `echo`. Run `teams project new <language> --help` to see other templates available for your language.
+
+## 4. Register bot infrastructure
+
+:::note Start your tunnel first
+Teams must reach your bot over **public HTTPS** — your `localhost` port isn't reachable from Teams' servers. Before running the command below, start a tunnel (e.g. [DevTunnels](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) or [ngrok](https://ngrok.com/)) and replace `<tunnel-host>` with the hostname it gives you.
+
+Learn more: [Local Tunnels](/developer-tools/local-tunnels)
+:::
+
+Run from inside your project directory:
+
+**TypeScript:**
+
+```bash
+teams app create \
+  --name echo-bot \
+  --endpoint https://<tunnel-host>/api/messages \
+  --env .env
+```
+
+**C#:**
+
+```bash
+teams app create \
+  --name echo
