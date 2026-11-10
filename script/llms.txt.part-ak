@@ -1,0 +1,860 @@
+ the `signout` method, this will remove the token from the User Token service cache
+
+**SDK 2.0 (Legacy):**
+
+```ts
+app.message('/signout', async ({ send, signout, isSignedIn }) => {
+  if (!isSignedIn) return;
+  await signout();
+  await send('you have been signed out!');
+});
+```
+
+**SDK 2.1 (current):**
+
+```ts
+app.message('/signout', async (ctx) => {
+  await graph.signOut(ctx);
+  await ctx.send('you have been signed out!');
+});
+```
+
+## Using multiple OAuth connections
+
+An agent may need more than one identity — for example Graph for the user's profile and GitHub for their repos. Each connection is registered separately, so tokens, callbacks and sign-out are scoped to the connection that owns them.
+
+```ts
+const app = new App();
+
+const graph = app.addOAuthFlow('graph', { oauthCardText: 'Sign in with Microsoft' });
+const github = app.addOAuthFlow('github', { oauthCardText: 'Sign in with GitHub' });
+
+app.message('/graph', async (ctx) => {
+  const token = await graph.signIn(ctx);
+  if (token) await sendGraphProfile(ctx, token);
+});
+
+app.message('/github', async (ctx) => {
+  const token = await github.signIn(ctx);
+  if (token) await sendGitHubProfile(ctx, token);
+});
+
+graph.onSignInComplete(async (ctx, token) => sendGraphProfile(ctx, token.token));
+github.onSignInComplete(async (ctx, token) => sendGitHubProfile(ctx, token.token));
+
+app.message('/signout github', async (ctx) => {
+  await github.signOut(ctx);
+  await ctx.send('Signed out of GitHub.');
+});
+```
+
+Signing out of one connection leaves the other signed in.
+
+:::info
+Each connection must exist on the Azure Bot resource under the name you register it with. Follow the [User Authentication Setup guide](/cli/guides/user-authentication-setup) once per connection.
+:::
+
+## Checking connection status
+
+One call returns the status of every registered connection, so you don't have to probe them individually.
+
+```ts
+app.message('/status', async (ctx) => {
+  const statuses = await ctx.getConnectionStatus();
+  const lines = statuses.map(
+    (status) => `- \`${status.connectionName}\`: ${status.hasToken ? 'signed in' : 'signed out'}`
+  );
+  await ctx.send(lines.join('\n'));
+});
+```
+
+## Resuming Pending Messages After Sign-In
+
+When a user isn't signed in and your message handler calls the sign-in method, an OAuth card is sent and the current turn ends. The sign-in completes on a *separate turn* — meaning the original message text is not available in the sign-in success context.
+
+To avoid ignoring what the user originally asked, store the pending message before initiating sign-in, then retrieve and process it once sign-in succeeds:
+
+**SDK 2.0 (Legacy):**
+
+```ts
+const pendingMessages = new Map<string, { text: string; activity: any }>();
+
+app.on('message', async ({ signin, activity, send }) => {
+  // signin() returns the token if already signed in, or undefined if OAuth card was sent
+  const token = await signin({
+    oauthCardText: 'To help with that, I need to sign you in first.',
+  });
+
+  if (!token) {
+    // OAuth card sent — store the original message for later
+    pendingMessages.set(activity.from.id, {
+      text: activity.text,
+      activity,
+    });
+    return;
+  }
+
+  // User is already signed in — process normally
+  await processMessage(activity.text, { send });
+});
+
+app.event('signin', async ({ send, userGraph, activity }) => {
+  const userId = activity.from.id;
+  const pending = pendingMessages.get(userId);
+
+  if (pending) {
+    pendingMessages.delete(userId);
+    await send('Successfully signed in! Processing your original request...');
+    await processMessage(pending.text, { send, userGraph });
+  } else {
+    await send('You are now signed in!');
+  }
+});
+```
+
+**SDK 2.1 (current):**
+
+```ts
+const pendingMessages = new Map<string, string>();
+
+app.on('message', async (ctx) => {
+  // signIn() returns the token if already signed in, or undefined if an OAuth card was sent
+  const token = await graph.signIn(ctx, {
+    oauthCardText: 'To help with that, I need to sign you in first.',
+  });
+
+  if (!token) {
+    pendingMessages.set(ctx.activity.from.id, ctx.activity.text);
+    return;
+  }
+
+  await processMessage(ctx.activity.text, ctx, token);
+});
+
+graph.onSignInComplete(async (ctx, token) => {
+  const userId = ctx.activity.from.id;
+  const pending = pendingMessages.get(userId);
+
+  if (!pending) {
+    await ctx.send('You are now signed in!');
+    return;
+  }
+
+  pendingMessages.delete(userId);
+  await ctx.send('Successfully signed in! Processing your original request...');
+  await processMessage(pending, ctx, token.token);
+});
+```
+
+:::tip
+For production apps, consider using a persistent store (database, Redis, etc.) instead of an in-memory map so pending messages survive restarts. You should also implement expiration or cleanup logic (e.g., a TTL) to discard stale entries when sign-in is cancelled, times out, or fails.
+:::
+
+## Handling Sign-In Failures
+
+When using SSO, if the token exchange fails Teams sends a `signin/failure` invoke activity to your app. The SDK includes a built-in default handler that logs a warning with actionable troubleshooting guidance. You can optionally register your own handler to customize the behavior:
+
+**SDK 2.0 (Legacy):**
+
+```ts
+app.on('signin.failure', async ({ activity, send }) => {
+  const { code, message } = activity.value;
+  console.log(`Sign-in failed: ${code} - ${message}`);
+  await send('Sign-in failed.');
+});
+```
+
+**SDK 2.1 (current):**
+
+```ts
+graph.onSignInFailure(async (ctx, failure) => {
+  ctx.log.error(`Graph sign-in failed: ${failure?.code} - ${failure?.message}`);
+  await ctx.send('Graph sign-in failed.');
+});
+```
+
+`failure` is undefined for token-service and token-exchange failures, which carry no Teams payload.
+
+:::tip
+The most common failure codes are `installedappnotfound` (bot app not installed for the user) and `resourcematchfailed` (Token Exchange URL doesn't match the Application ID URI). See [SSO Setup - Troubleshooting](#sso-setup) for a full list of failure codes and troubleshooting steps.
+:::
+
+:::warning
+A `signin/failure` activity doesn't name its connection. The SDK attributes it from the pending sign-in recorded when the flow started; if that can't be resolved, *every* registered connection's failure handler is notified. Check the connection first if your handler does something destructive.
+
+Registering a flow also turns on per-turn state unless you configure `state` yourself, defaulting to local, in-process storage. Configure shared state storage before running more than one instance — otherwise pending sign-in attribution and token-exchange dedup don't cross processes, and sign-in fails intermittently.
+:::
+
+## Regional Configs
+You may be building a regional bot that is deployed in a specific Azure region (such as West Europe, East US, etc.) rather than global. This is important for organizations that have data residency requirements or want to reduce latency by keeping data and authentication flows within a specific area.
+
+These examples use West Europe, but follow the equivalent for other regions.
+
+**Azure Portal:**
+
+To configure a new regional bot in Azure, you must setup your resoures in the desired region. Your resource group must also be in the same region. 
+
+1. Deploy a new App Registration in `westeurope`.
+2. Deploy and link a new Enterprise Application (Service Principal) on Microsoft Entra in `westeurope`.
+3. Deploy and link a new Azure Bot in `westeurope`.
+4. In your App Registration, in the `Authentication (Preview)` tab, add a `Redirect URI` for the Platform Type `Web` to your regional endpoint (e.g., `https://europe.token.botframework.com/.auth/web/redirect`)
+
+![Authentication Tab](/screenshots/regional-auth.png)
+
+5. In your `.env` file (or wherever you set your environment variables), add your `OAUTH_URL`. For example:
+`OAUTH_URL=https://europe.token.botframework.com`
+
+**Agents Toolkit:**
+
+To configure a new regional bot with ATK, you will need to make a few updates. Note that this assumes you have not yet deployed the bot previously.
+
+1. In `azurebot.bicep`, replace all `global` occurrences to `westeurope`
+2. In `manifest.json`, in `validDomains`, `*.botframework.com` should be replaced by `europe.token.botframework.com`
+3. In `aad.manifest.json`, replace `https://token.botframework.com/.auth/web/redirect` with `https://europe.token.botframework.com/.auth/web/redirect`
+4. In your `.env` file, add your `OAUTH_URL`. For example:
+`OAUTH_URL=https://europe.token.botframework.com`
+
+## Resources
+
+[User Authentication Basics](https://learn.microsoft.com/en-us/azure/bot-service/bot-builder-concept-authentication?view=azure-bot-service-4.0)
+
+---
+
+### PAGE: Microsoft 365 Extensions
+
+# Microsoft 365 Extensions
+
+Microsoft 365 Extensions let you extend an existing Teams SDK application to channels such as Direct Line and Email without rewriting any Teams-specific capabilities.
+
+Register your existing Teams SDK handlers on the `App` returned by `useTeamsSdk` (TypeScript), `use_teams_sdk` (Python), or `AddTeamsSdk` (C#).
+Microsoft 365 Extensions work with your existing Teams SDK configuration and handlers.
+This app is a bridge where Microsoft Agents SDK `AgentApplication` acts the multichannel host.
+
+Matching Teams activities continue through your Teams SDK handlers, while non-Teams activities and unmatched Teams activities flow through the Agents SDK application.
+
+## How to Use It
+
+Install the Microsoft 365 Extensions package alongside the Microsoft Agents SDK:
+
+```bash
+npm install @microsoft/agents-hosting @microsoft/teams.m365extensions
+```
+
+Add an Agents SDK host to your existing Teams SDK application, then replace your current `App` initialization with `useTeamsSdk`:
+
+```typescript
+
+  AgentApplication,
+  CloudAdapter,
+  getAuthConfigWithDefaults,
+  MemoryStorage,
+  type TurnState,
+} from '@microsoft/agents-hosting';
+
+const authConfig = getAuthConfigWithDefaults({
+  clientId: process.env.CLIENT_ID,
+  clientSecret: process.env.CLIENT_SECRET,
+  tenantId: process.env.TENANT_ID,
+});
+
+const adapter = new CloudAdapter(authConfig);
+const agentApp = new AgentApplication({
+  storage: new MemoryStorage(),
+  adapter,
+});
+
+const app = useTeamsSdk(agentApp, adapter.connectionManager);
+```
+
+## Key Benefits
+
+### Extend Your Teams App to Other Channels
+
+Through this extension, you can connect your existing Teams SDK app to other channels such as Direct Line and Email without rewriting your Teams-specific logic.
+
+| Activity | Route |
+| --- | --- |
+| Teams activity matching a Teams SDK handler | Teams SDK |
+| Teams activity without a matching Teams SDK handler | Agents SDK |
+| Direct Line / Direct Line activity | Agents SDK |
+| Email activity | Agents SDK |
+
+#### Example Message Handler
+You can use the Agents SDK message handler to identify the incoming channel and confirm how each activity was routed.
+The incoming activity is recognized as Teams if the `channelId="msteams"`.
+
+```typescript
+AGENT_SDK_APP.onMessage(command('channel'), async (context: TurnContext) => {
+  const via = isTeamsChannel(context.activity)
+    ? 'Teams turn with no matching teams.ts route → fell through'
+    : 'non-Teams channel → passed straight through';
+  await context.sendActivity(`[Agent SDK] channelId=${context.activity.channelId} (${via})`);
+});
+```
+
+#### Direct Line
+
+![The channel command in Direct Line returning an Agents SDK response that identifies Direct Line as a non-Teams channel that passed straight through.](/screenshots/m365-extensions-web-chat.png)
+
+#### Email
+
+![The channel command sent through Email returning an Agents SDK response that identifies Email as a non-Teams channel that passed straight through.](/screenshots/m365-extensions-email.png)
+
+### Access Rich Teams Capabilities from Agents SDK
+
+When an Agents SDK handler receives a Teams activity, it can use the Teams SDK API client to access Teams-specific capabilities, such as message reactions:
+
+```typescript
+
+agentApp.onMessage(/^agents sdk react$/i, async (context) => {
+  if (!isTeamsChannel(context.activity)) {
+    await context.sendActivity('Message reactions are only available in Teams.');
+    return;
+  }
+
+  const response = await context.sendActivity('Adding then removing a reaction.');
+  const api = app.api.fromServiceUrl({
+    serviceUrl: context.activity.serviceUrl!,
+  });
+  const conversationId = context.activity.conversation!.id;
+
+  await api.conversations.addReaction(conversationId, response!.id!, 'like');
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await api.conversations.deleteReaction(conversationId, response!.id!, 'like');
+});
+```
+
+For a full example, the [TypeScript Microsoft 365 Extensions sample](https://github.com/microsoft/teams.ts/tree/main/examples/m365extensions) demonstrates a single application running across Teams, Web Chat, and Email.
+
+## How It Works
+
+Microsoft 365 Extensions adds a lightweight middleware bridge to your existing Teams SDK application. Aside from app initialization, your Teams-specific code stays the same.
+
+1. **Add the bridge.** Call `useTeamsSdk` (TypeScript), `use_teams_sdk` (Python), or `AddTeamsSdk` (C#) to connect your app to Agents SDK.
+2. **Keep your Teams logic.** Existing handlers and API client calls continue handling Teams activities.
+3. **Add more channels.** Direct Line, Email, and unmatched Teams activities flow to the Agents SDK.
+
+---
+
+### PAGE: State Management
+
+# State Management
+
+:::info[SDK 2.1]
+Built-in state management is a **Teams SDK 2.1** feature.
+:::
+
+The Teams SDK provides built-in, per-turn state for storing conversation and user data across activities. State is loaded before each activity handler runs, saved automatically after the turn, and exposed through `ctx.state`.
+
+## Setup
+
+State is disabled by default. Enable it with the `state: true` app option:
+
+```typescript
+
+const app = new App({
+  state: true,
+});
+```
+
+Without a dedicated provider, state uses the Teams SDK's process-local, in-memory `LocalStorage` implementation. This is useful for local development, but values are lost when the process restarts and aren't shared across instances.
+
+:::note
+Registering an OAuth flow with `addOAuthFlow()` automatically enables state so pending sign-ins can be associated with the correct flow. Set `state: false` explicitly to fall back to process-local in-memory maps.
+:::
+
+## Reading and writing state
+
+Use `ctx.state.conversation` and `ctx.state.user` in an activity handler. Values must be JSON-serializable.
+
+```typescript
+app.on('message', async (ctx) => {
+  if (!ctx.state) {
+    throw new Error('Turn state is not enabled.');
+  }
+
+  const count = (ctx.state.conversation.get<number>('messageCount') ?? 0) + 1;
+  ctx.state.conversation.set('messageCount', count);
+
+  if (ctx.state.user && ctx.activity.text?.startsWith('my name is ')) {
+    ctx.state.user.set(
+      'name',
+      ctx.activity.text.slice('my name is '.length).trim()
+    );
+  }
+
+  const name = ctx.state.user?.get<string>('name') ?? 'there';
+  await ctx.reply(`Hello, ${name}. Message #${count}.`);
+});
+```
+
+Use `has()` to check for a value, `delete()` to remove one, and `clear()` to remove all values. If you mutate an object or array returned by `get()`, call `set()` with the updated value so the scope is marked for persistence.
+
+Conversation state is shared by everyone in the current conversation. User state is scoped to the current sender **within that conversation** and is unavailable when an activity has no usable sender ID.
+
+The SDK writes a scope to storage only when it changes during the current activity. After all handlers for that activity finish, the SDK saves those changes and closes the turn state. Read or update state only while handling the activity. Don't capture it for timers or background tasks because accessing it after the turn ends throws `TurnStateSealedError`.
+
+## Clearing state
+
+Remove a value with `delete()`, or clear a scope with `clear()`. To remove both scopes from the backing store:
+
+```typescript
+await ctx.state.delete();
+```
+
+Values written after `delete()` are saved normally at the end of the current turn.
+
+## Scaling to distributed state
+
+For production or multi-instance deployments, implement the Teams SDK's `IStorage<string, string>` contract with a shared, durable backend and pass it through `state.storage`. The state API used by handlers doesn't change:
+
+```typescript
+
+function createApp(durableStorage: IStorage<string, string>): App {
+  return new App({
+    state: {
+      storage: durableStorage,
+      keyPrefix: 'my-app',
+    },
+  });
+}
+```
+
+The SDK serializes each scope as a JSON string and replaces the complete scope on save, so concurrent turns use last-writer-wins semantics. Configure expiry, retries, and other storage-specific behavior on your storage implementation.
+
+---
+
+## CAT: teams
+
+### PAGE: Client Secret Authentication Setup
+
+# Client Secret Authentication Setup
+
+Client Secret authentication is the simplest method, using a password-like secret to authenticate your bot. While easy to set up, secrets need to be rotated periodically and kept secure.
+
+## Prerequisites
+
+Before you begin, ensure you have:
+- An Azure subscription
+- Permissions to create App Registrations and Azure Bot Services
+
+## Setup Steps
+
+### Step 1: Create Azure Bot with Single Tenant
+
+When creating your Azure Bot Service, you must select `Single Tenant` for the `Type of App`.
+
+![Single Tenant Bot Creation](/screenshots/single-tenant-bot.png)
+
+### Step 2: Create Client Secret
+
+**Azure Portal:**
+
+1. Navigate to your **App Registration** in the Azure Portal
+2. Go to **Certificates and Secrets**
+3. Click **New client secret**
+4. Add a description and select an expiration period
+5. Click **Add**
+6. **Important**: Copy the secret value immediately - it won't be shown again
+
+![Secret in Certificates and Secrets](/screenshots/client-secret.png)
+
+**Azure CLI:**
+
+```bash
+# Create a new client secret
+az ad app credential reset --id $APP_ID --append
+```
+
+The command will output the secret value. Save it securely.
+
+## Next Steps
+
+After completing the Azure setup, configure your application code with the appropriate environment variables. See the App Authentication Essentials Guide for details.
+
+---
+
+### PAGE: SSO Setup
+
+# SSO Setup
+
+This section describes how to configure the Azure Bot Service (ABS), the Entra App Registration and the Teams manifest to enable Single-Sign-On (SSO) for your Teams app.
+
+:::tip Let an AI assistant run this for you
+The [`teams-dev` skill](#agent-skills) can orchestrate the full SSO setup for you — install it in your AI coding assistant and say *"set up SSO for my Teams bot"*.
+:::
+
+## Prerequisites
+
+Before starting SSO configuration, ensure you have:
+
+- An **Azure-managed** Azure Bot Service resource and its associated Entra App Registration (Application ID / Client ID and Tenant ID).
+- To set up using CLIs: the [`az` CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) and the [Teams Developer CLI](/cli/getting-started/installation) installed and authenticated.
+
+  :::note CLI users: migrate first if your bot is Teams-managed
+  SSO requires an Azure-managed bot because the OAuth connection lives in Azure Bot Service. If you registered with `teams app create` (default Teams-managed), migrate your bot first:
+
+  ```bash
+  teams app bot migrate <appId> --subscription <id> --resource-group <rg>
+  ```
+
+  Your `CLIENT_ID`, `CLIENT_SECRET`, and `TENANT_ID` stay the same. See [Bot Locations](/cli/concepts/bot-locations) for details.
+  :::
+
+## SSO with User-Assigned Managed Identity
+
+If your bot uses **User-Assigned Managed Identity (MI)** authentication, the bot ID is the MI's client ID. Since managed identities don't have client secrets, you need a **separate Entra App Registration** for the OAuth connection used in SSO. In this setup, the IDs map differently:
+
+| Configuration | Value |
+|---------------|-------|
+| Application ID URI (Expose an API) | `api://botid-botId` (where `botId` = MI client ID) |
+| `webApplicationInfo.id` in manifest | The **auth app's** client ID (not the bot/MI ID) |
+| `webApplicationInfo.resource` in manifest | `api://botid-botId` (must match the Application ID URI) |
+| OAuth connection `ClientId` / `ClientSecret` | From the **auth app** registration |
+| OAuth connection `tokenExchangeUrl` | `api://botid-botId` (must match the Application ID URI) |
+
+:::caution
+The Application ID URI on the auth app must use the **bot ID** (MI client ID), not the auth app's own client ID. Teams requires the `botid-` prefix format and matches this URI across the manifest, OAuth connection, and Entra app registration.
+:::
+
+## Configure the Entra App Registration for SSO
+
+You need an Entra ID App Registration to configure the OAuth Connection in Azure Bot Service. If you don't already have one, follow the [Create the Entra App Registration](#azure-configuration) guide first.
+
+**Azure Portal:**
+
+1. Add the Bot Framework redirect URI. From your App Registration, navigate to **Authentication** and add a **Web** platform redirect URI with the value `https://token.botframework.com/.auth/web/redirect`
+
+![Entra auth redirect](/screenshots/entra-auth-redirect.png)
+
+2. Configure the API. From `Expose an API`, click `Add` to Application ID URI and set the value to `api://`. Add the scope `access_as_user` and select who can _consent_.
+
+![Entra oauth scopes](/screenshots/entra-oauth-scopes.png)
+
+3. Authorize the client applications for SSO. To enable the Teams clients, desktop and web, to perform the SSO flow you must add the following client applications to the scope defined before: Teams Desktop `1fec8e78-bce4-4aaf-ab1b-5451cc387264` and Teams Web `5e3ce6c0-2b1f-4285-8d4b-75ee78787346`
+
+![Entra oauth authorize client app](/screenshots/entra-authorize-clientapp.png)
+
+**Azure CLI:**
+
+The full SSO setup involves several steps the Teams Developer CLI doesn't handle directly (creating the `access_as_user` scope, pre-authorizing Teams clients, configuring the OAuth connection in Azure Bot Service, updating `webApplicationInfo` in the manifest). The [`teams-dev` skill](#agent-skills) orchestrates all of this for you — install it in your AI coding assistant and say *"set up SSO for my Teams bot"*.
+
+### Step 1: Look Up the AAD App Object ID
+
+The Microsoft Graph object ID differs from the app's Client ID. Query it using the `az` CLI:
+
+```bash
+az rest \
+  --method GET \
+  --uri "https://graph.microsoft.com/v1.0/applications?\$filter=appId eq '$appId'" \
+  --query "value[0].id" \
+  --output tsv
+```
+
+Save the result as your `objectId`.
+
+### Step 2: Generate a Scope UUID
+
+The `access_as_user` scope needs a stable unique identifier. Generate one with PowerShell, bash, or any UUID tool:
+
+```bash
+# PowerShell
+[guid]::NewGuid().ToString()
+
+# bash / macOS / Linux
+uuidgen
+```
+
+Save the result as your `scopeId`.
+
+### Step 3: Configure the AAD App (Identifier URI, Scope, Redirect URI)
+
+Substitute your `appId` and `scopeId` into the following command:
+
+```bash
+az rest \
+  --method PATCH \
+  --uri "https://graph.microsoft.com/v1.0/applications/$objectId" \
+  --headers "Content-Type=application/json" \
+  --body "{
+    \"identifierUris\": [\"api://botid-$appId\"],
+    \"api\": {
+      \"requestedAccessTokenVersion\": 2,
+      \"oauth2PermissionScopes\": [{
+        \"id\": \"$scopeId\",
+        \"adminConsentDescription\": \"Allow the application to access the bot on behalf of the signed-in user.\",
+        \"adminConsentDisplayName\": \"Access as user\",
+        \"userConsentDescription\": \"Allow the application to access the bot on your behalf.\",
+        \"userConsentDisplayName\": \"Access as user\",
+        \"isEnabled\": true,
+        \"type\": \"User\",
+        \"value\": \"access_as_user\"
+      }]
+    },
+    \"web\": {
+      \"redirectUris\": [\"https://token.botframework.com/.auth/web/redirect\"]
+    }
+  }"
+```
+
+### Step 4: Pre-Authorize Teams Clients
+
+Pre-authorize the Teams desktop and web clients so they can silently acquire SSO tokens. Substitute your `scopeId`:
+
+```bash
+az rest \
+  --method PATCH \
+  --uri "https://graph.microsoft.com/v1.0/applications/$objectId" \
+  --headers "Content-Type=application/json" \
+  --body "{
+    \"api\": {
+      \"oauth2PermissionScopes\": [{
+        \"id\": \"$scopeId\",
+        \"adminConsentDescription\": \"Allow the application to access the bot on behalf of the signed-in user.\",
+        \"adminConsentDisplayName\": \"Access as user\",
+        \"userConsentDescription\": \"Allow the application to access the bot on your behalf.\",
+        \"userConsentDisplayName\": \"Access as user\",
+        \"isEnabled\": true,
+        \"type\": \"User\",
+        \"value\": \"access_as_user\"
+      }],
+      \"preAuthorizedApplications\": [
+        {
+          \"appId\": \"1fec8e78-bce4-4aaf-ab1b-5451cc387264\",
+          \"delegatedPermissionIds\": [\"$scopeId\"]
+        },
+        {
+          \"appId\": \"5e3ce6c0-2b1f-4285-8d4b-75ee78787346\",
+          \"delegatedPermissionIds\": [\"$scopeId\"]
+        }
+      ]
+    }
+  }"
+```
+
+:::note
+The pre-authorization patch must run after the scope patch because the pre-authorized apps reference the `scopeId`, which must exist first. If it fails with a scope-not-found error, wait 15 seconds (AAD replication lag) and retry.
+:::
+
+## Create the OAuth connection in Azure Bot Service
+
+You need to add a new OAuth connection to your Azure Bot Service resource.
+
+**Azure Portal:**
+
+1. From the Bot service resource in the Azure Portal, navigate to `Settings/Configuration` and `Add OAuth Connection settings`.
+2. Provide a name for your connection e.g. `graph`, and select the _Service Provider_ `Azure Active Directory v2`
+3. Populate the `TenantId`/`ClientId`/`ClientSecret` from the values obtained in the previous section. Configure the Token Exchange URL with the Application ID URI (e.g. `api://`), and add the Scopes you need e.g. `User.Read`
+
+![ABS OAuth connection](/screenshots/abs-oauth-connection.png)
+
+**Azure CLI:**
+
+Use the `az bot authsetting create` command to create the OAuth connection. The `--setting-name` is the OAuth connection name — `"graph"` is used here as an example since Microsoft Graph is the most common scenario. Replace the other placeholders with your values:
+
+```bash
+az bot authsetting create \
+  --resource-group $resourceGroup \
+  --name $botName \
+  --setting-name "graph" \
+  --client-id $appId \
+  --client-secret $clientSecret \
+  --provider-scope-string "User.Read" \
+  --service "Aadv2" \
+  --parameters tenantId=$tenantId tokenExchangeUrl=api://botid-$appId
+```
+
+:::tip
+To include additional permissions (Graph, SharePoint, etc.), space-delimit them: `"User.Read Mail.Read Sites.Read.All"`.
+:::
+
+## Configure the App Manifest
+
+The Teams application manifest needs to be updated to include `webApplicationInfo` with the `Application Id` and `Application ID URI`.
+
+**Manifest JSON:**
+
+Add `*.botframework.com` to `validDomains` and add the `webApplicationInfo` section to your `manifest.json`:
+
+```json
+"validDomains": [
+    ...
+    // highlight-next-line
+    "*.botframework.com"
+ ],
+ // highlight-start
+ "webApplicationInfo": {
+    "id": "",
+    "resource": "api://"
+  }
+ // highlight-end
+```
+
+**Teams Developer CLI:**
+
+:::note
+This option is available if your app was created using the Teams Developer CLI.
+:::
+
+You can set the `webApplicationInfo` fields directly without downloading and re-uploading the manifest:
+
+```bash
+teams app update $teamsAppId \
+  --web-app-info-id "$appId" \
+  --web-app-info-resource "api://botid-$appId"
+```
+
+You can then verify the full SSO configuration with the doctor command:
+
+```bash
+teams app doctor $teamsAppId
+```
+
+Expected — all SSO checks pass:
+- Identifier URI: `api://botid-<appId>` ✔
+- `access_as_user` scope ✔
+- Teams clients pre-authorized ✔
+- Bot Framework redirect URI present ✔
+- OAuth connection — URIs aligned ✔
+
+## Cross-Tenant Considerations
+
+If your Entra auth app lives in a different tenant than where the Teams app is installed, see [Cross-Tenant Considerations](troubleshooting-sso#cross-tenant-considerations) in the troubleshooting guide.
+
+## Troubleshooting
+
+If you encounter SSO errors, see the [Troubleshooting](troubleshooting-sso) guide for common issues and solutions.
+
+---
+
+### PAGE: Teams Core Concepts
+
+# Teams Core Concepts
+
+Running an agent on Teams involves several moving pieces — an app registration, an Azure or Teams-managed bot, a public messaging endpoint, and a sideloaded app package. Understanding these components helps you debug and deploy your agent confidently. The [Teams Developer CLI](/cli/) automates all of them with a single `teams app create` command, but it's worth knowing what it sets up underneath.
+
+## Basic Flow
+
+```mermaid
+flowchart LR
+    %% Main actors
+    User([User])
+
+    %% Teams section
+    subgraph Teams ["Teams"]
+        TeamsClient["Teams Client"]
+        TeamsBackend["Teams Backend"]
+    end
+
+    %% Azure section
+    subgraph Azure ["Azure"]
+        AppReg["App Registration"]
+        AzureBot["Azure Bot"]
+    end
+
+    %% Local Server section
+    subgraph LocalServer ["Local Server"]
+        DevTunnel["DevTunnel"]
+        LocalApp["Your local application"]
+    end
+
+    %% Deployed Server section
+    subgraph DeployedServer ["Deployed Server"]
+        DeployedApp["Your deployed application"]
+    end
+
+    %% Define connections
+    User <--> TeamsClient
+    TeamsClient <--> TeamsBackend
+    TeamsBackend <--> AppReg
+    AppReg <--> AzureBot
+    AzureBot --> LocalServer
+    AzureBot --> DeployedServer
+```
+
+**Teams**
+
+- Teams Client: User-facing agent that interacts with the user.
+- Teams Backend: Part of your app package; includes a manifest with your app’s client ID.
+
+**Azure**
+
+- App Registration: Contains a unique client ID and secret for your app.
+- Azure Bot: Connects your app to Teams; contains a pointer to your HTTPS URL.
+
+**Local Server**
+
+- Dev Tunnel: Public-facing HTTPS tunnel to expose your local machine.
+- Local App: Your application running locally; handles events from Teams and sends responses.
+
+**Deployed Server**
+
+- Deployed App: Your app deployed to the cloud with a public HTTPS endpoint; also interacts with Teams.
+
+## Core Concepts
+
+When working with Teams, these are the key concepts. Keep in mind, this is a simplified view of the architecture.
+
+- Teams Client: This is the Teams application where users interact with your agent. This can be the desktop app, web app, or mobile app.
+- Teams Backend: This service handles all the Teams-related operations, including keeping a record of your manifest, and routing messages from your agent to the Azure bot service.
+- App Registration: This is the registration of your agent in Azure. This Application Registration issues a unique client ID for your application and a client secret. This is used to authenticate your agent application with the Teams backend and other Azure services (including Graph if you are using it).
+- Azure Bot Service: This is the service that handles all the bot-related operations, including routing messages from Teams to your agent and vice versa. This holds the URL to your agent application.
+- DevTunnel: This is a service that creates a public facing URL to your locally running application. Azure Bot Service requires that you have a public facing https URL to your agent application.
+- Local Agent Application: This is your agent application running on your local machine.
+- Deployed Agent Application: This is your deployed agent which probably has a public facing URL.
+
+## DevTunnel
+
+[DevTunnel](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/overview) is a critical component that makes your locally running agent accessible to Teams: it creates a secure public HTTPS endpoint that forwards to your local server so Teams can route messages and events to it. DevTunnel is only one way to do this — ngrok works too.
+
+For setup steps, the plain-HTTP protocol gotcha, verification, and security notes, see [Local Tunnels](/developer-tools/local-tunnels).
+
+## Teams App Provisioning
+
+Before your agent can interact with Teams, it needs to be properly registered and configured. This step handles creating or updating the App Registration and creating or registering the Azure Bot instance in Azure.
+
+### App Registration
+
+- Creates an App ID (i.e. Client ID) in the Teams platform
+- Sets up a bot registration with the Bot Framework
+- Creates a client secret that your agent can use to authenticate to send and receive messages. The [Teams Developer CLI](/cli/) writes this value to `.env` (or `appsettings.json` for C#) automatically when you run `teams app create`.
+
+### Azure Bot
+
+- Creates an Azure Bot resource (with `--azure`) or a Teams-managed bot registration (default)
+- Associates the bot with your App Registration
+- Configures the messaging endpoint to point to your DevTunnel (or public URL if deployed)
+
+## Sideloading Process
+
+Sideloading is the process of installing your agent in Teams. You are able to pass in the manifest and icons (zipped up) to the Teams client. Sideloading an application automatically makes that application available to you. You are also able to sideload the application in a Team or a Group chat. In this case, the application will be available to all members of that Team or Group chat.
+
+:::warning
+Sideloading needs to be enabled in your tenant. If this is not the case, then you will need to contact your Teams administrator to enable it.
+:::
+
+## Provisioning and Deployment
+
+To test your app in Teams you need, at minimum, a provisioned bot. You'll likely also have other resources such as storage.
+
+The fastest path is `teams app create`, which provisions a Teams-managed bot by default — no Azure subscription required. See the [Quickstart: Register your app](../get-started/quickstart-register).
+
+If you need OAuth or SSO (typically for delegated Microsoft Graph access on behalf of a user), the bot must be Azure-managed. Either start with `teams app create --azure --subscription <id> --resource-group <rg>`, or start Teams-managed and switch later with `teams app bot migrate <appId> --subscription <id> --resource-group <rg>` (both require an Azure subscription) — your `CLIENT_ID`, `CLIENT_SECRET`, and `TENANT_ID` stay the same. For a hand-rolled Azure setup, follow the [Azure Configuration](#azure-configuration) guide.
+
+For deploying your bot's endpoint to App Service, Container Apps, or other Azure compute, see the Microsoft Learn [deployment overview](https://learn.microsoft.com/en-us/microsoftteams/deploy-overview).
+
+---
+
+### PAGE: SSO Troubleshooting
+
+# SSO Troubleshooting
+
+When SSO fails, Teams sends a `signin/failure` invoke activity to your bot with a `code` and `message` describing the error. The SDK's default handler logs a warning with these details.
+
+## Failure codes
+
+| Code | Silent | Description |
+|------|--------|-------------|
+| `installappfailed` | No | Failed to install the app in the user's personal scope (group chat SSO flow). |
+| `authrequestfailed` | No | The SSO auth request failed after app installation. |
+| `installedappno
