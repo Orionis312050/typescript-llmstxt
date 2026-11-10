@@ -197,7 +197,7 @@ See [VS Code Agent Skills documentation](https://code.visualstudio.com/docs/copi
 
 **Cursor:**
 
-See [Cursor Skills documentation](https://cursor.com/docs/skills#installing-skills-for-github) for installation instructions.
+See [Cursor Skills documentation](https://cursor.com/docs/skills#installing-skills-from-github) for installation instructions.
 
 ## What the skill covers
 
@@ -207,8 +207,8 @@ The `teams-dev` skill guides your AI assistant through:
 | ----------------------------- | --------------------------------------------------------------------------------- |
 | **Manage bot infrastructure** | Register your bot with Teams, manage credentials, and update configuration        |
 | **Develop Teams bot**         | Build bot applications from scratch or add Teams capabilities to existing servers |
-| **Set up SSO**               | Enable Single Sign-On so users can authenticate seamlessly without login prompts  |
-| **Troubleshoot**             | Diagnose and resolve common bot setup and configuration issues                    |
+| **Set up SSO**                | Enable Single Sign-On so users can authenticate seamlessly without login prompts  |
+| **Troubleshoot**              | Diagnose and resolve common bot setup and configuration issues                    |
 
 The skill does **not** cover hosting or deployment — it focuses on bot registration, development, and configuration.
 
@@ -590,7 +590,7 @@ flowchart LR
 
 **Dependency Injection**
 
-- Register your own services in `builder.Services` and inject them into handlers and middleware, just like any standard ASP.NET Core app
+- Register your own services in `builder.Services` and inject them into handlers and middleware, just like any ASP.NET Core app
 
 :::note[SDK 2.0 (Legacy)]
 The SDK 2.0 model exposed the app as an `App` class with a **plugin architecture** — plugins sat both in front of the app (hosting it as a server) and behind it (reacting to activities being sent), and communicated through an event bus. The 2.1 **removes plugins** in favor of ASP.NET Core middleware and dependency injection. If you're upgrading from Bot Framework or 2.0 patterns, see the [BotBuilder migration guide](../migrations/botbuilder). The plugin-based model is still described below for the TypeScript and Python SDKs.
@@ -831,7 +831,7 @@ const sendProactiveNotification = async (userId: string) => {
 ```
 
 :::tip
-In this example, you see how to get the `conversationId` using one of the activity handlers. This is a good place to store the conversation id, but you can also do this in other places like when the user installs the app or when they sign in. The important thing is that you have the conversation id stored somewhere so that you can use it later.
+In this example, you see how to get the `conversationId` using one of the activity handlers. This is a good place to store the conversation id, but you can also do this in other places like when the user installs the app or when they sign in. The important thing is that you have the conversation id stored somewhere so you can use it later.
 :::
 
 ## Targeted Proactive Messages
