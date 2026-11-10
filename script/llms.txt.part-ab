@@ -1,0 +1,575 @@
+---|---|
+| `app.send()` | Top-level | Top-level |
+| `app.reply()` | In-thread | In-thread |
+
+To proactively send a message as a reply in a thread, use `app.reply()` with the id of the chat or channel and the id of the top-level message of the thread.
+Take the ids from `channelData` on the inbound activity:
+
+- **Chat id:** `channelData.chat.id`, in a 1:1 chat.
+- **Channel id:** `channelData.channel.id`, in a channel.
+- **Reply chain id:** `channelData.replyChain.id`, the id of the top-level message of the thread.
+  - A `replyChain.id` that matches the message's own `activity.id` indicates a top-level post.
+    A different `replyChain.id` indicates the message is in-thread.
+  - If `replyChain` is absent, there is no reply chain id to take from the inbound activity, so pass an id you stored yourself.
+    The SDK does not take it from the conversation id.
+
+```typescript
+// chatOrChannelId is channelData.chat.id or channelData.channel.id
+// replyChainId is channelData.replyChain.id
+await app.reply(chatOrChannelId, replyChainId, 'Thread update!');
+```
+
+To send a new top-level (non-threaded) message instead, send to the id of the chat or channel with `app.send()`.
+
+```typescript
+// Send a new top-level message to the chat or channel
+await app.send(chatOrChannelId, 'Hello!');
+```
+
+If the reply chain call fails, `app.reply()` throws the error to your code.
+It does not fall back to another route.
+
+Inside a handler, a response goes to the `serviceUrl` of the inbound activity.
+`app.send()` and `app.reply()` have no inbound activity and take no service URL argument, so they go to the app's service URL: the `serviceUrl` app option, else the `SERVICE_URL` environment variable, else `https://smba.trafficmanager.net/teams`.
+
+A service URL without its cloud segment can be accepted and still post the message flat, outside the thread.
+Store the full service URL of the inbound activity, and pass or configure it for proactive calls, instead of rebuilding or trimming it.
+
+The API client's reply operation, `api.conversations.replyToActivity()`, is a plain send to the conversation it is given.
+It posts to the activities route of that conversation and does not place the message in a reply chain.
+To call the reply chain route directly, use `api.conversations.createReplyChainActivity()`, which is experimental.
+It takes the chat or channel id and the reply chain id, and has no fallback.
+
+If you stored a conversation id from a channel message, it ends in `;messageid=<root post id>`.
+That form identifies the thread, not the chat or channel, and the reply chain endpoint rejects it.
+Store `channelData.chat.id` or `channelData.channel.id` and `channelData.replyChain.id` instead.
+
+A proactive call has no inbound activity to take an identity from.
+When the recipient is an agentic user, pass its identity from the inbound activity's recipient.
+Without it, the call uses the app's own credentials instead of the agentic user's.
+An agentic app cannot get an app-only token, so the call fails with an authentication error (`AADSTS82001`) and nothing is sent.
+
+```typescript
+
+// agenticIdentity is undefined unless the recipient is an agentic user
+const agenticIdentity = getAgenticIdentity(context.activity.recipient);
+await app.reply(chatOrChannelId, replyChainId, 'Thread update!', { agenticIdentity });
+```
+
+For reactive threading (within a handler), see [Threading](./#threading).
+
+---
+
+### PAGE: Sovereign Cloud Configuration
+
+# Sovereign Cloud Configuration
+
+:::info
+Most developers do not need this page. It applies only to bots deployed in US Government (GCC-High, DoD) or China (21Vianet) cloud environments. If your bot runs in the standard commercial cloud, no additional configuration is needed.
+:::
+
+Sovereign clouds use separate Azure infrastructure with different service endpoints for authentication, token services, and bot communication. The Teams SDK handles this automatically when you specify your cloud environment.
+
+## Supported Clouds
+
+| Cloud | Value | Azure Portal | Teams Client |
+|-------|-------|-------------|-------------|
+| Public (default) | `Public` | portal.azure.com | teams.microsoft.com |
+| US Gov (GCCH) | `USGov` | portal.azure.us | gov.teams.microsoft.us |
+| US Gov (DoD) | `USGovDoD` | portal.azure.us | dod.teams.microsoft.us |
+| China (21Vianet) | `China` | portal.azure.cn | n/a |
+
+## Prerequisites
+
+- A Teams tenant in the corresponding cloud environment
+- An Azure Bot resource and app registration in the sovereign cloud portal
+
+## Configuration
+
+Add the `CLOUD` environment variable to your existing app authentication configuration. This works alongside any auth method (client secret, managed identity, federated credentials).
+
+```env
+CLOUD=USGov
+```
+
+Valid values: `Public`, `USGov`, `USGovDoD`, `China`
+
+You can also configure the cloud programmatically:
+
+```typescript
+
+const app = new App({
+  cloud: US_GOV,
+});
+```
+
+**Available cloud presets:** `PUBLIC`, `US_GOV`, `US_GOV_DOD`, `CHINA`
+
+## Per-Endpoint Overrides
+
+For scenarios requiring customization of individual endpoints, such as China single-tenant bots that need a tenant-specific login URL, you can override specific properties.
+
+```typescript
+
+const app = new App({
+  cloud: withOverrides(CHINA, { loginTenant: 'your-tenant-id' }),
+});
+```
+
+Available override properties: `LoginEndpoint`, `LoginTenant`, `BotScope`, `TokenServiceUrl`, `OpenIdMetadataUrl`, `TokenIssuer`, `GraphScope`
+
+## What the SDK Configures Automatically
+
+When you set a cloud environment, the SDK automatically uses the correct endpoints for:
+
+- **Login authority**: where tokens are acquired (e.g. `login.microsoftonline.us` for GCCH)
+- **Bot token scope**: the OAuth scope for bot-to-service communication
+- **Token service URL**: where user OAuth tokens are managed
+- **JWT validation**: the signing keys and issuers used to verify inbound activity tokens
+- **OpenID metadata**: the discovery endpoint for token validation configuration
+
+You do not need to configure these endpoints individually.
+
+## Next Steps
+
+After configuring your cloud environment, your bot will authenticate and communicate using the correct sovereign cloud endpoints. No other code changes are needed; OAuth flows and all other SDK features work identically across clouds.
+
+## Troubleshooting
+
+### Bot fails to acquire a token at startup
+
+**Symptom:** The SDK logs `AADSTS500011` (resource principal not found) or `AADSTS700016` (application not found in directory) when the app starts.
+
+**Cause:** The bot's app registration lives in the wrong cloud's tenant. Sovereign clouds (USGov, USGovDoD, China) have separate Azure AD instances from the public cloud, and an app registered in the commercial cloud cannot authenticate to a sovereign tenant (and vice versa).
+
+**Fix:** Register the bot in the sovereign cloud portal that matches your `cloud` setting. For USGov/DoD use `portal.azure.us`, for China use `portal.azure.cn`.
+
+### Inbound activities are rejected with "issuer mismatch" or "audience invalid"
+
+**Symptom:** Token validation fails on inbound `/api/messages` requests. Logs show `IDX10204` or `IDX10214`.
+
+**Cause:** The bot is configured for the wrong cloud, so its JWT validator expects tokens signed by a different issuer than the one your sovereign Bot Channel Service uses.
+
+**Fix:** Confirm the `cloud` setting matches the cloud your Azure Bot resource was created in. The SDK derives the expected issuer and JWKS URI from this setting; mismatching the cloud breaks token validation even when the credentials are otherwise valid.
+
+### China bots fail user OAuth flows with the multi-tenant login URL
+
+**Symptom:** OAuth or user-token flows fail in China with login redirects that do not resolve.
+
+**Cause:** China sovereign cloud does not have a stable multi-tenant login alias. Single-tenant bots must point to their specific tenant explicitly via a `LoginTenant` override.
+
+**Fix:** Override `loginTenant` on the China preset to your tenant ID.
+
+```typescript
+
+const app = new App({
+  cloud: withOverrides(CHINA, { loginTenant: 'your-tenant-id' }),
+});
+```
+
+### `CLOUD` environment variable seems ignored
+
+**Symptom:** The bot still uses public cloud endpoints despite setting `CLOUD=USGov`.
+
+**Cause:** Either the env var is not set in the running process (only in your shell), or your code passes `cloud:` explicitly, which takes precedence.
+
+**Fix:** Confirm the env var is exported into the process environment, then check whether your code passes `cloud:` explicitly. With current behavior, the value passed in code wins over the environment variable.
+
+For other authentication errors not specific to sovereign clouds, see the [App Authentication](#app-authentication) guide.
+
+---
+
+### PAGE: Activity Type Reference
+
+# Activity Type Reference
+
+The application supports a number of activity types:
+
+## Core Activity Routes
+
+| Route            | Responsibility                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------- |
+| `message`        | User messages the app                                                                           |
+| `typing`         | Sends a typing indicator to indicate the app got the user's message and is computing a response |
+| `deleteUserData` | Triggered when a user requests their data to be deleted according to privacy regulations        |
+| `mention`        | Triggered when the bot is @mentioned in a conversation                                          |
+
+## Configuration Routes
+
+| Route           | Invoke Path     | Responsibility                                                |
+| --------------- | --------------- | ------------------------------------------------------------- |
+| `config.open`   | `config/fetch`  | When app is installed, the user may configure it via a dialog |
+| `config.submit` | `config/submit` | Configuration dialog submission                               |
+| `tab.open`      | `tab/fetch`     | Initializes tab configuration experiences                     |
+| `tab.submit`    | `tab/submit`    | Processes tab configuration submissions                       |
+
+## Dialog Routes
+
+| Route           | Invoke Path   | Responsibility               |
+| --------------- | ------------- | ---------------------------- |
+| `dialog.open`   | `task/fetch`  | Opens a dialog               |
+| `dialog.submit` | `task/submit` | Processes dialog submissions |
+
+## Authentication Routes
+
+| Route                   | Invoke Path            | Responsibility                                |
+| ----------------------- | ---------------------- | --------------------------------------------- |
+| `signin.token-exchange` | `signin/tokenExchange` | When a token exchange happens during SSO Auth |
+| `signin.verify-state`   | `signin/verifyState`   | When a verification passes after OAuth        |
+
+## Message Interaction Routes
+
+| Route             | Invoke Path                       | Responsibility                                                          |
+| ----------------- | --------------------------------- | ----------------------------------------------------------------------- |
+| `message.execute` | `actionableMessage/executeAction` | An action was executed on a message                                     |
+| `message.submit`  | `message/submitAction`            | Handles message action submissions                                      |
+| `card.action`     | `adaptiveCard/action`             | Triggered when a user interacts with an Adaptive Card button or control |
+
+## File Handling Routes
+
+| Route                  | Responsibility                                               |
+| ---------------------- | ------------------------------------------------------------ |
+| `file.consent`         | Manages file sharing permission workflows in Teams           |
+| `file.consent.accept`  | Triggered when user accepts a file consent card for sharing  |
+| `file.consent.decline` | Triggered when user declines a file consent card for sharing |
+
+## Message Extension Routes
+
+| Route                             | Invoke Path                            | Responsibility                                        |
+| --------------------------------- | -------------------------------------- | ----------------------------------------------------- |
+| `message.ext.query-link`          | `composeExtension/queryLink`           | A link unfurling request for an installed application |
+| `message.ext.anon-query-link`     | `composeExtension/anonymousQueryLink`  | An anonymous link unfurling request                   |
+| `message.ext.query`               | `composeExtension/query`               | Message extension search query                        |
+| `message.ext.select-item`         | `composeExtension/selectItem`          | Message extension item selection                      |
+| `message.ext.submit`              | `composeExtension/submitAction`        | Message extension action submission                   |
+| `message.ext.open`                | `composeExtension/fetchTask`           | Message extension task fetching for an action         |
+| `message.ext.query-settings-url`  | `composeExtension/querySettingUrl`     | Retrieves configuration URLs for message extensions   |
+| `message.ext.setting`             | `composeExtension/setting`             | Processes message extension settings changes          |
+| `message.ext.card-button-clicked` | `composeExtension/onCardButtonClicked` | Card button click handling in message extensions      |
+| `message.ext.edit`                | N/A                                    | Processes edits to message extension previews         |
+| `message.ext.send`                | N/A                                    | Handles sending of message extension content          |
+
+## Lifecycle Routes
+
+| Route            | Responsibility                                              |
+| ---------------- | ----------------------------------------------------------- |
+| `install.add`    | Triggered when the app is newly installed to a team or chat |
+| `install.remove` | Triggered when the app is uninstalled from a team or chat   |
+| `install.update` | Triggered when the app is updated in a team or chat         |
+| `handoff.action` | Manages handoffs from a different agent to your application |
+
+## Conversation Update Routes
+
+| Route             | Responsibility                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `membersAdded`    | Triggered when new users join a team or are added to a chat where the bot is active  |
+| `membersRemoved`  | Triggered when users leave a team or are removed from a chat where the bot is active |
+| `channelCreated`  | Triggered when a new channel is created in a team where the bot is installed         |
+| `channelRenamed`  | Triggered when a channel is renamed in a team where the bot is installed             |
+| `channelDeleted`  | Triggered when a channel is deleted from a team where the bot is installed           |
+| `channelRestored` | Triggered when a previously deleted channel is restored                              |
+| `teamArchived`    | Triggered when a team is archived                                                    |
+| `teamDeleted`     | Triggered when a team is deleted where the bot is installed                          |
+| `teamHardDeleted` | Triggered when a team is permanently deleted (beyond recovery)                       |
+| `teamRenamed`     | Triggered when a team is renamed where the bot is installed                          |
+| `teamRestored`    | Triggered when a previously deleted team is restored                                 |
+| `teamUnarchived`  | Triggered when a team is unarchived                                                  |
+| `messageUpdate`   | Triggered when a message is edited in a conversation with the bot                    |
+| `messageDelete`   | Triggered when a message is deleted in a conversation with the bot                   |
+
+## Meeting Routes
+
+| Route                     | Invoke Path                                         | Responsibility                                                             |
+| ------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------- |
+| `meetingStart`            | `application/vnd.microsoft.meetingStart`            | Triggered at the beginning of a Teams meeting where the bot is present     |
+| `meetingEnd`              | `application/vnd.microsoft.meetingEnd`              | Triggered at the end of a Teams meeting where the bot is present           |
+| `meetingParticipantJoin`  | `application/vnd.microsoft.meetingParticipantJoin`  | Triggered when participants join a Teams meeting where the bot is present  |
+| `meetingParticipantLeave` | `application/vnd.microsoft.meetingParticipantLeave` | Triggered when participants leave a Teams meeting where the bot is present |
+| `readReceipt`             | `application/vnd.microsoft.readReceipt`            | Tracks when messages are read by users                                     |
+
+---
+
+### PAGE: Listening To Events
+
+# Listening To Events
+
+An **event** is a foundational concept in building agents — it represents something noteworthy happening either on Microsoft Teams or within your application. These events can originate from the user (e.g. installing or uninstalling your app, sending a message, submitting a form), or from your application server (e.g. startup, error in a handler).
+
+```mermaid
+flowchart LR
+    Teams["Teams"]:::less-interesting
+    Server["App Server"]:::interesting
+    AppEventHandlers["Event Handler (app.event())"]:::interesting
+
+    Teams --> |Activity| Server
+    Teams --> |Signed In| Server
+    Teams --> |...other<br/>incoming events| Server
+    Server ---> |incoming<br/>events| AppEventHandlers
+    Server ---> |outgoing<br/>events<br/>| AppEventHandlers
+
+    linkStyle 0,1,2,3,4 stroke:#b1650f,stroke-width:1px
+    classDef interesting fill:#b1650f,stroke:#333,stroke-width:4px;
+```
+
+The Teams SDK makes it easy to subscribe to these events and respond appropriately. You can register event handlers to take custom actions when specific events occur — such as logging errors, triggering workflows, or sending follow-up messages.
+
+Here are the events that you can start building handlers for:
+
+| **Event Name**      | **Description**                                                                |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `start`             | Triggered when your application starts. Useful for setup or boot-time logging. |
+| `signin`            | Triggered during a sign-in flow via Teams.                                     |
+| `error`             | Triggered when an unhandled error occurs in your app. Great for diagnostics.   |
+| `activity`          | A catch-all for incoming Teams activities (messages, commands, etc.).          |
+| `activity.response` | Triggered when your app sends a response to an activity. Useful for logging.   |
+| `activity.sent`     | Triggered when an activity is sent (not necessarily in response).              |
+
+### Example 1
+
+We can subscribe to errors that occur in the app.
+
+```typescript
+app.event('error', ({ error }) => {
+  app.log.error(error);
+  // Or Alternatively, send it to an observability platform
+});
+```
+
+### Example 2
+
+When a user signs in using `OAuth` or `SSO`, use the graph api to fetch their profile and say hello.
+
+```typescript
+
+const graph = app.addOAuthFlow('graph');
+
+graph.onSignInComplete(async (ctx, token) => {
+  const client = new GraphClient({ token: () => token.token }, { baseUrlRoot: app.graphBaseUrl });
+  const me = await client.call(endpoints.me.get);
+  await ctx.send(`👋 Hello ${me.displayName}`);
+});
+```
+
+:::tip
+The app-wide `signin` event fires for every connection. To react to just one, use its flow's `onSignInComplete` callback as shown above. See the [auth guide](#user-authentication).
+:::
+
+---
+
+### PAGE: Trust Model
+
+# Trust Model
+
+The Teams SDK enforces a layered authentication model. Inbound JSON Web Tokens are validated once, at the HTTP boundary, before any handler in your application sees them. Everything downstream — your activity handlers, the parsed token accessor on the context, and any custom routes that opt into the same policy — operates on tokens that have already passed signature, issuer, audience, and expiry checks.
+
+This page describes where validation happens, what you can trust afterwards, and how to extend the model when you add your own protected surfaces.
+
+## What the SDK validates automatically
+
+For every inbound request on `/api/messages`, the SDK validates the bearer token before invoking any activity handler. Validation includes:
+
+- **Signature verification** against the authoritative JSON Web Key Set (JWKS). The signing keys are discovered from the OpenID Configuration endpoint for the configured cloud environment, so key rotation requires no action from you.
+- **Issuer check** against the set of expected issuers for your cloud (commercial, US Government, DoD, or China).
+- **Audience check** against your bot's application identifier.
+- **Caller application check** for Entra Agent ID tokens: the caller claim (`azp`, or `appid` when `azp` is absent) must identify the Agent 365 platform application.
+- **Lifetime check** with default clock skew tolerance.
+- **Signing algorithm check** — only `RS256` is accepted.
+
+Requests that fail any of these checks are rejected with HTTP 401 before reaching your code. If your application observes an inbound activity at all, the underlying token has been verified.
+
+## What you can rely on downstream
+
+Once the request is past the validator, the SDK exposes selected token claims through typed accessors on the activity context. The accessor classes (`JsonWebToken` in each SDK) are payload views over an already-validated token — they perform no validation of their own. You can read fields like the tenant ID, application ID, service URL, and expiration directly without re-checking the token.
+
+The same pattern applies to tokens the SDK acquires on your behalf — for example, when MSAL returns an access token for an outbound API call, or when an OAuth user-token exchange completes. Those tokens originate from Microsoft identity infrastructure and are wrapped in the same accessor type so your code reads them with a consistent API.
+
+## Adding custom authentication to your own surfaces
+
+If your bot exposes additional HTTP surfaces beyond the default Teams activity endpoint — for example a callback endpoint for an external system, a webhook handler, or any custom route you register — you are responsible for authenticating those requests yourself.
+
+The SDK's HTTP adapter is a thin layer over a standard web framework, so you attach your own auth middleware using that framework's conventions. The pattern is the same in all three SDKs: short-circuit the request with HTTP 401 when the credential check fails, otherwise call the next handler.
+
+```typescript
+// Express middleware: gate a custom route with a shared secret.
+const requireWebhookAuth: express.RequestHandler = (req, res, next) => {
+  const secret = process.env["WEBHOOK_SECRET"] ?? "";
+  const expected = "Bearer " + secret;
+  if (req.headers.authorization !== expected) {
+    res.status(401).end();
+    return;
+  }
+  next();
+};
+```
+
+If the route needs the same trust posture as `/api/messages` — Microsoft-issued bearer tokens rather than a shared secret — reuse the SDK's built-in validator instead. See the [App Authentication](#app-authentication) guide for how to compose validators.
+
+## What not to do
+
+The accessor types described above are not safe to construct against arbitrary input. They expose claims from a parsed token; they do not check whether the token was signed by a party you trust.
+
+Do not:
+
+- Read a token from an untrusted HTTP request and construct a `JsonWebToken` from it as a basis for any authorization decision.
+- Pass user-supplied tokens directly to downstream services without first running them through the SDK's validator (or your own equivalent).
+- Disable the SDK's automatic validation on `/api/messages`. The default-deny posture relies on it.
+
+If you need to validate a token outside the activity pipeline, use the validator components directly rather than the accessor. Each SDK exposes a token validator that performs the full signature-verification flow against the same JWKS endpoint the activity pipeline uses.
+
+---
+
+### PAGE: Sending Messages
+
+# Sending Messages
+
+Sending messages is a core part of an agent's functionality. With all activity handlers, a `send` method is provided which allows your handlers to send a message back to the user to the relevant conversation.
+
+:::info[SDK 2.1]
+In SDK 2.1, the per-turn `context.Send`, `context.Reply`, and `context.Quote` helpers work the same way. The main difference is **streaming** — see the tabbed examples below.
+:::
+
+```typescript
+app.on('message', async ({ activity, send }) => {
+  await send(`You said: ${activity.text}`);
+});
+```
+
+In the above example, the handler gets a `message` activity, and uses the `send` method to send a reply to the user.
+
+```typescript
+app.on('signin.verify-state', async ({ send }) => {
+  await send('You have successfully signed in!');
+});
+```
+You are not restricted to only replying to `message` activities. In the above example, the handler is listening to `signin.verify-state` events, which are sent when a user successfully signs in.
+
+:::tip
+This shows an example of sending a text message. Additionally, you are able to send back things like [adaptive cards](#adaptive-cards) by using the same `send` method. Look at the [adaptive card](#adaptive-cards) section for more details.
+:::
+
+## Streaming
+
+You may also stream messages to the user which can be useful for long messages, or AI generated messages. The SDK makes this simple for you by providing a `stream` function which you can use to send messages in chunks.
+
+Streaming changes how the response arrives, not how fast your agent produces it. Text appears incrementally as it is generated, so the user sees progress rather than a blank screen, and you can show a thinking or status indicator before any real output exists. A streamed response is also stoppable: when the user stops it, the SDK surfaces the cancellation to your handler so you can abandon the remaining work. The gain is in perceived time to first output, which is why streaming suits long or model generated replies and adds little to a short one you could simply send.
+
+```typescript
+app.on('message', async ({ activity, stream }) => {
+  stream.emit('hello');
+  stream.emit(', ');
+  stream.emit('world!');
+
+  // result message: "hello, world!"
+});
+```
+
+:::note
+Streaming is currently only supported in 1:1 conversations, not group chats or channels. Teams also supports only one concurrent streaming response per chat at a time.
+
+Every inbound activity gets its own stream, and the SDK closes that stream at the end of the turn. It does not serialize turns, though, and handlers can run concurrently, so a second activity can arrive while the first is still streaming. Streaming therefore brings message handling concurrency concerns that do not exist when you just send a reply, and resolving them may be implemented in your custom code by serializing turns per conversation or by finalizing the in-flight stream before starting the next one.
+:::
+
+![Animated image showing agent response text incrementally appearing in the chat window.](/screenshots/streaming-chat.gif)
+
+### Informative updates and stopping a stream
+
+An informative update shows a status line such as "Thinking..." while the agent works, before any response text exists.
+
+`stream.update()` sends an informative update.
+An update emitted after response text has accumulated is ignored.
+The SDK learns that the user stopped the stream from the answer to a chunk it sends.
+From then on `stream.canceled` is true and `stream.emit()` throws `StreamCancelledError`.
+A stream creates its message from response text or an informative update.
+If the first output is only attachments, `stream.close()` creates no message, so send the attachments with `send()` instead.
+
+### Chunk pacing and retries
+
+You do not need to throttle your own chunks. Rapid `stream.emit()` calls are coalesced and spaced roughly 500 milliseconds apart, so a token-by-token loop becomes a couple of network calls per second rather than one call per token. Every streamed chunk carries the full text accumulated so far rather than just the newest delta, so collapsing several chunks into one send never loses content. Wrapping your own throttle or sleep around each chunk mostly slows the response down, since it would be pacing a path that is already paced.
+
+`stream.emit()` is fire and forget. It appends to a queue and returns immediately instead of awaiting the network, and a flush then drains the whole queue into one accumulated buffer and sends it as a single typing activity. When further chunks arrive while a send is already in flight, the next flush is scheduled 500ms later, which is what collapses a fast loop into roughly two sends per second. Chunks that arrive slower than a round trip are sent as they come, so the SDK never adds latency to a slow producer.
+
+Failed sends are retried for you with exponential backoff: up to 5 attempts, waiting 500ms, 1s, 2s, and 4s between them. This is a blind retry on transient failures rather than rate limit aware backoff, since the SDK does not read `Retry-After` or treat `429` specially. Terminal `403`s are deliberately excluded, so a stream that has already timed out or been cancelled is never retried back to life.
+
+None of this extends the [two minute window](#the-two-minute-streaming-limit), which runs on wall clock from the first chunk. Pacing keeps a stream under the streaming API's rate limit, but does not buy more time. It also applies only to the streaming path: the plain activity updates go out exactly when they are sent, so that cadence stays yours to manage.
+
+### The two minute streaming limit
+
+Teams keeps a message stream open for two minutes, measured from its first chunk. After that the service rejects further chunks for that message with a `403` and the [error code](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/streaming-ux#error-codes) `ContentStreamNotAllowed` (`Content stream finished due to exceeded streaming time.`).
+
+However, hitting the limit does not mean the response is lost. The SDK marks the stream as timed out and stops pushing chunks, but it keeps buffering everything your agent produces, and `stream.close()` finalizes by updating the original message in place with the full buffered text. 
+
+:::warning
+The two minute clock starts on the **first streamed chunk**, and an informative update (`stream.update()`) is a chunk. An agent that posts a status update immediately and then thinks for three minutes has spent its entire window before emitting a single token. When the slow work happens before you have any output, do that work first and open the stream once real content starts.
+:::
+
+### Running longer than two minutes
+
+To outlast the window, hand off before it closes: stream normally, then finalize the stream and continue the response growing with plain activity updates. No streaming window applies to plain updates, so the answer can keep arriving for as long as your agent runs.
+
+```typescript
+
+app.on('message', async ({ activity, send, stream }) => {
+  let opened: number | undefined;
+  let text = '';
+  let editing = false;
+  let messageId: string | undefined;
+  let lastEdit = 0;
+
+  for await (const chunk of runAgent(activity.text)) {
+    text += chunk;
+
+    // Phase 1: real streaming. The window opens on the first streamed chunk,
+    // not when the handler starts, so the clock starts here.
+    if (!editing && (opened === undefined || Date.now() - opened < 110_000)) {
+      opened ??= Date.now();
+      stream.emit(chunk);
+      continue;
+    }
+
+    // Hand off once, keeping the finalized message's id.
+    if (!editing) {
+      messageId = (await stream.close())?.id;
+      editing = true;
+    }
+
+    // Phase 2: plain edits on the same message. No two minute ceiling.
+    if (messageId && Date.now() - lastEdit > 3_000) {
+      await send(new MessageActivityInput(text).withId(messageId));
+      lastEdit = Date.now();
+    }
+  }
+
+  if (!editing) {
+    await stream.close();
+  } else if (messageId) {
+    await send(new MessageActivityInput(text).withId(messageId));
+  } else {
+    // close() published nothing, so send the buffered text rather than drop it.
+    await send(new MessageActivityInput(text));
+  }
+});
+```
+
+Setting an id on an outgoing activity routes the send through the update path, so each edit replaces the finalized message instead of posting a new one.
+
+Plain updates are subject to ordinary activity throttling rather than the streaming path's allowance, so pace them at a cadence measured in seconds rather than sending one per token.
+
+### Starting another streamed message
+
+Calling `stream.emit()` again after the stream has been closed posts a second, separate message in the conversation by reusing the SDK object in your custom handler; it clears its buffered state and starts the new message. The second message gets its own stream id, so it also gets its own fresh two minute window. The message already finalized stays finalized and is not reopened or extended. Use this when your agent has a genuinely separate second answer to stream, not as a way to give one response more time.
+
+### Streaming in threads
+
+The first message of a stream is placed the same way as a response sent with `send()`.
+See [Reactive Threading](#reactive-threading-within-a-handler) for the rules.
+In a 1:1 chat the stream starts in the thread when the inbound message is inside a thread, and at the top level otherwise.
+The SDK applies the same rules in channels: a channel stream starts in the thread of the inbound message.
+Without `channelData.replyChain.id` on the inbound activity, the stream is not placed in a reply chain.
+Teams itself supports streaming only in 1:1 chats, as noted above.
+
+Only the first chunk of each streamed message uses the reply chain route.
+The later chunks are sent to the inbound conversation with the stream id of the first message.
+In a 1:1 chat inside a thread, the streamed message appears in the thread pane (checked live with TypeScript and Python).
+In a channel, if the service answers 404 to the reply chain route, the first chunk falls back to the inbound conversation, as with `send()`, and stays in the thread.
+In a 1:1 chat, a failed reply chain route does not fall back.
+An error from the 
