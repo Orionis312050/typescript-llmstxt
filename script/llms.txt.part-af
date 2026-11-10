@@ -1,0 +1,807 @@
+of the generated text. This guide builds on the agent from [Build an agent in Teams](./build-agent).
+
+## Streaming
+
+Streaming delivers responses to Teams incrementally as they're generated, rather than waiting for the full reply to complete. Each chunk of text is appended to the stream as it arrives.
+
+```typescript
+const runner = client.chat.completions.runTools({ model, messages: history, tools, stream: true });
+runner.on('content', (delta: string) => stream.emit(delta));
+await runner.done();
+```
+
+See [Streaming](#sending-messages) for the full story on how Teams renders chunks and the constraints on stream lifecycle.
+
+## AI-generated label
+
+Mark the message as system-generated so Teams clearly labels it as AI output.
+
+`addAiGenerated()` marks the message as system-generated.
+
+```typescript
+const reply = new MessageActivityInput().addAiGenerated();
+stream.emit(reply);
+```
+
+<img
+  src=StreamingImgUrl
+  alt="Animated screenshot of an agent reply streaming into a Teams chat token by token, with the 'AI generated' label on the message."
+  style={ width: '100%', maxWidth: 900 }
+/>
+
+## Feedback
+
+Enable built-in thumbs up/down controls on the reply and surface a custom feedback form when users respond.
+
+`addFeedback('custom')` enables the thumbs up/down controls and lets you surface a custom feedback form when users respond.
+
+```typescript
+const reply = new MessageActivityInput().addAiGenerated().addFeedback('custom');
+stream.emit(reply);
+```
+
+See [Feedback](#feedback) for the full form-handling story — capturing the submission, persisting it, and following up with the user.
+
+## Clarification cards
+
+When the agent calls the `request_clarification` tool (from [Build an agent](./build-agent#adding-a-local-tool)), the reply is a card, not text. The model still produces a short wrap-up after the tool returns, so discard the streamed text and send only the card. Clearing the stream's accumulated text before emitting the card-only activity keeps the turn to a single clean reply.
+
+```typescript
+function shipResult(result: AgentRunResult, stream: IStreamer, recipientId: string): void {
+  if (result.pendingCard) {
+    // Clarification card — discard any streamed text, then emit card-only.
+    stream.clearText();
+    stream.emit(new MessageActivityInput().addCard('adaptive', result.pendingCard).addAiGenerated());
+    return;
+  }
+  // normal reply: attach follow-ups, citations, feedback (below).
+}
+```
+
+The user's choice is captured by a card-action handler and fed straight back into the agent as the next turn:
+
+```typescript
+app.on('card.action.clarification', async ({ activity, stream }) => {
+  const data = (activity.value.action.data ?? {}) as Record<string, unknown>;
+  const choice = typeof data[CLARIFICATION_INPUT_ID] === 'string' ? (data[CLARIFICATION_INPUT_ID] as string) : '';
+  if (choice) {
+    const result = await agent.run(activity.conversation.id, choice, stream);
+    shipResult(result, stream, activity.from.id);
+  }
+  return { statusCode: 200, type: 'application/vnd.microsoft.activity.message', value: 'OK' };
+});
+```
+
+The user's selection arrives as a fresh turn through the card-action route — the same code path as a normal message — so the agent picks up with full context.
+
+<img
+  src=ClarificationImgUrl
+  alt="Animated screenshot of the clarification flow: the user asks an ambiguous question, the bot replies with a choice card, the user picks an option, and the bot streams a grounded answer with an inline citation."
+  style={ width: '100%', maxWidth: 900 }
+/>
+
+## Suggested prompts
+
+Suggested prompts give the user one-click follow-up questions after a reply. In Teams they render as chips under the message; tapping one sends the value back as a normal user message, so the same message handler picks it up — no extra routing required.
+
+Rather than hard-coding them, generate two contextual follow-ups with a separate lightweight model call constrained to a strict JSON schema, then attach them as suggested actions.
+
+```typescript
+const FOLLOW_UPS_PROMPT =
+  'Produce 2 specific prompts the user might want to ask next, based on the conversation so far. ' +
+  'Each must be phrased in the first person and stay under 8 words.';
+
+const FOLLOW_UPS_SCHEMA = {
+  type: 'object',
+  properties: { prompt1: { type: 'string' }, prompt2: { type: 'string' } },
+  required: ['prompt1', 'prompt2'],
+  additionalProperties: false,
+} as const;
+
+async function generateFollowUps(history: ChatCompletionMessageParam[]): Promise<string[]> {
+  try {
+    const completion = await client.chat.completions.create({
+      model: deployment,
+      messages: [...history, { role: 'system', content: FOLLOW_UPS_PROMPT }],
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'follow_ups', strict: true, schema: FOLLOW_UPS_SCHEMA },
+      },
+    });
+    const parsed = JSON.parse(completion.choices[0]?.message?.content ?? '{}');
+    return [parsed.prompt1, parsed.prompt2].filter((s): s is string => typeof s === 'string' && s.length > 0);
+  } catch {
+    return []; // degrade silently — the main reply still ships
+  }
+}
+```
+
+Attach the generated prompts to the reply with `withSuggestedActions`:
+
+```typescript
+finalMarker.withSuggestedActions({
+  to: [recipientId],
+  actions: followUps.map((prompt) => ({ type: 'imBack', title: prompt, value: prompt })),
+});
+```
+
+<img
+  src=SuggestedPromptsImgUrl
+  alt="Animated screenshot of suggested follow-up prompt chips appearing under an agent reply; tapping one sends it back as the next user message."
+  style={ width: '100%', maxWidth: 900 }
+/>
+
+## Citations
+
+Citations render as footnote-style references inline with the reply — `[1]`, `[2]`, etc. — surfacing the source title, abstract, and URL on hover. They originate from tool outputs, where the collector from [Grounding responses with citations](./build-agent#grounding-responses-with-citations) assigned each result a stable position.
+
+When building the final reply, attach only the citations whose position actually appears in the streamed text.
+
+Use the `CitationCollector` from [Build an agent](./build-agent#grounding-responses-with-citations). `attachCitations` reads the `[N]` markers out of the streamed text and writes a citation entity onto the final activity for each one it has data for.
+
+```typescript
+attachCitations(activity: MessageActivityInput, fullText: string): number {
+  const used = new Set<number>();
+  for (const match of fullText.matchAll(/\[(\d+)\]/g)) used.add(Number(match[1]));
+
+  let attached = 0;
+  for (const entry of this.entries.values()) {
+    if (!used.has(entry.position)) continue;
+    activity.addCitation(entry.position, {
+      name: entry.title || `Source ${entry.position}`,
+      abstract: entry.snippet || 'No description available.',
+      url: entry.url,
+    });
+    attached++;
+  }
+  return attached;
+}
+```
+
+Assemble the final marker activity with everything at once — the AI label, custom feedback, citations, and follow-up chips — then emit it so the streamer folds them into the final message:
+
+```typescript
+const finalMarker = new MessageActivityInput().addAiGenerated().addFeedback('custom');
+result.citations.attachCitations(finalMarker, result.fullText);
+if (result.followUps.length > 0) {
+  finalMarker.withSuggestedActions({
+    to: [recipientId],
+    actions: result.followUps.map((p) => ({ type: 'imBack', title: p, value: p })),
+  });
+}
+stream.emit(finalMarker);
+```
+
+<img
+  src=CitationsImgUrl
+  alt="Animated screenshot showing a user hovering over a footnote citation in an agent response, with a pop-up showing explanatory text."
+  style={ width: '100%', maxWidth: 900 }
+/>
+
+## Sensitivity labels
+
+:::info[Coming Soon]
+Sensitivity labels are planned for the next SDK release, version 2.2.0.
+:::
+
+Sensitivity labels mark a message with a Microsoft Purview label, which Teams shows as a shield on the message with the label name on hover.
+
+Add a message-level label with `addSensitivityLabel`, passing the label ID as `'@id'`, which is sent to Teams as `@id`. Calling it again replaces the previous label. To label an individual source, set `usageInfo` on the citation appearance.
+
+```typescript
+const labelId = '<purview-label-id>';
+
+const reply = new MessageActivityInput('Here is the quarterly summary [1].')
+  .addSensitivityLabel({ '@id': labelId, name: 'Confidential' })
+  .addCitation(1, {
+    name: 'Quarterly report',
+    abstract: 'Revenue and forecast for the quarter.',
+    usageInfo: { '@id': labelId, name: 'Confidential' },
+  });
+```
+
+- `name` is optional but recommended. Teams shows it when it cannot resolve `@id`, for example for a deleted label, and shows no label at all if there is no `name` either. Set it whenever you set `description`, because Teams can reject a message whose label has a description but no name.
+- The sensitivity label, the AI-generated label, and citations are all written to the same root message entity, so an activity always carries exactly one root message entity, regardless of the order you call them in.
+
+### Where label IDs come from
+
+The label ID is the GUID of a Purview sensitivity label configured in your tenant. Get it from the Microsoft Purview portal or from your tenant admin.
+
+---
+
+### PAGE: Executing Actions
+
+# Executing Actions
+
+Adaptive Cards support interactive elements through **actions**—buttons, links, and input submission triggers that respond to user interaction.
+You can use these to collect form input, trigger workflows, show task modules, open URLs, and more.
+
+## Action Types
+
+The Teams SDK supports several action types for different interaction patterns:
+
+| Action Type               | Purpose                | Description                                                                  |
+| ------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
+| `Action.Execute`          | Server‑side processing | Send data to your bot for processing. Best for forms & multi‑step workflows. |
+| `Action.Submit`           | Simple data submission | Legacy action type. Prefer `Execute` for new projects.                       |
+| `Action.OpenUrl`          | External navigation    | Open a URL in the user's browser.                                            |
+| `Action.ShowCard`         | Progressive disclosure | Display a nested card when clicked.                                          |
+| `Action.ToggleVisibility` | UI state management    | Show/hide card elements dynamically.                                         |
+
+:::info
+For complete reference, see the [official documentation](https://adaptivecards.microsoft.com/?topic=Action.Execute).
+:::
+
+## Creating Actions with the SDK
+
+### Single Actions
+
+The SDK provides builder helpers that abstract the underlying JSON. For example:
+
+```typescript
+
+// ...
+
+new ExecuteAction({ title: 'Submit Feedback' })
+  .withData({ action: 'submit_feedback' })
+  .withAssociatedInputs('auto'),
+```
+
+### Action Sets
+
+Group actions together using `ActionSet`:
+
+```typescript
+
+// ...
+
+new ActionSet(
+  new ExecuteAction({ title: 'Submit Feedback' })
+    .withData({ action: 'submit_feedback' })
+    .withAssociatedInputs('auto'),
+  new OpenUrlAction('https://adaptivecards.microsoft.com').withTitle('Learn More')
+);
+```
+
+### Raw JSON Alternative
+
+Just like when building cards, if you prefer to work with raw JSON, you can do just that. You get type safety for free in TypeScript.
+
+```typescript
+
+// ...
+
+{
+  type: 'Action.OpenUrl',
+  url: 'https://adaptivecards.microsoft.com',
+  title: 'Learn More',
+} as const satisfies IOpenUrlAction
+```
+
+## Working with Input Values
+
+### Associating data with the cards
+
+Sometimes you want to send a card and have it be associated with some data. Set the `data` value to be sent back to the client so you can associate it with a particular entity.
+
+```typescript
+
+  AdaptiveCard,
+  TextInput,
+  ToggleInput,
+  ActionSet,
+  ExecuteAction,
+} from '@microsoft/teams.cards';
+// ...
+
+function editProfileCard() {
+  const card = new AdaptiveCard(
+    new TextInput({ id: 'name' }).withLabel('Name').withValue('John Doe'),
+    new TextInput({ id: 'email', label: 'Email', value: 'john@contoso.com' }),
+    new ToggleInput('Subscribe to newsletter').withId('subscribe').withValue('false'),
+    new ActionSet(
+      new ExecuteAction({ title: 'Save' })
+        .withData({
+          action: 'save_profile',
+          entityId: '12345', // This will come back once the user submits
+        })
+        .withAssociatedInputs('auto')
+    )
+  );
+
+  // Data received in handler
+  /**
+  {
+    action: "save_profile",
+    entityId: "12345",     // From action data
+    name: "John Doe",      // From name input
+    email: "john@doe.com", // From email input
+    subscribe: "true"      // From toggle input (as string)
+  }
+  */
+
+  return card;
+}
+```
+
+### Input Validation
+
+Input Controls provide ways for you to validate. More details can be found on the Adaptive Cards [documentation](https://adaptivecards.microsoft.com/?topic=input-validation).
+
+```typescript
+
+  AdaptiveCard,
+  NumberInput,
+  TextInput,
+  ActionSet,
+  ExecuteAction,
+} from '@microsoft/teams.cards';
+// ...
+
+function createProfileCardInputValidation() {
+  const ageInput = new NumberInput({ id: 'age' })
+    .withLabel('Age')
+    .withIsRequired(true)
+    .withMin(0)
+    .withMax(120);
+
+  const nameInput = new TextInput({ id: 'name' })
+    .withLabel('Name')
+    .withIsRequired()
+    .withErrorMessage('Name is required!'); // Custom error messages
+  const card = new AdaptiveCard(
+    nameInput,
+    ageInput,
+    new TextInput({ id: 'location' }).withLabel('Location'),
+    new ActionSet(
+      new ExecuteAction({ title: 'Save' })
+        .withData({
+          action: 'save_profile',
+        })
+        .withAssociatedInputs('auto') // All inputs should be validated
+    )
+  );
+
+  return card;
+}
+```
+
+## Routing & Handlers
+
+### Using SubmitData
+
+The SDK provides a `SubmitData` helper that sets the routing key for your action. This is the recommended way to wire up actions to specific handlers:
+
+```typescript
+
+// ...
+
+new ExecuteAction({ title: 'Submit Feedback' })
+  .withData(new SubmitData('submit_feedback'))
+  .withAssociatedInputs('auto')
+
+// You can also pass extra static data alongside the action name
+new ExecuteAction({ title: 'Save' })
+  .withData(new SubmitData('save_profile', { entityId: '12345' }))
+  .withAssociatedInputs('auto')
+```
+
+`SubmitData` sets a reserved `action` key in the card's data payload. When the user clicks the button, the SDK router reads this key to dispatch to the matching handler.
+
+### Action-Specific Handlers
+
+Register handlers for specific actions. When you use `SubmitData` to set the action name on the card, the SDK routes directly to the matching handler:
+
+```typescript
+
+// ...
+
+// 'submit_feedback' matches the identifier passed to SubmitData('submit_feedback')
+app.on('card.action.submit_feedback', async ({ activity, send }) => {
+  const data = activity.value.action.data;
+  await send(`Feedback received: ${data.feedback}`);
+  return {
+    statusCode: 200,
+    type: 'application/vnd.microsoft.activity.message',
+    value: 'Action processed successfully',
+  };
+});
+
+app.on('card.action.save_profile', async ({ activity, send }) => {
+  const data = activity.value.action.data;
+  await send(`Profile saved!\nName: ${data.name}\nEmail: ${data.email}`);
+  return {
+    statusCode: 200,
+    type: 'application/vnd.microsoft.activity.message',
+    value: 'Action processed successfully',
+  };
+});
+```
+
+The route name follows the pattern `card.action.<action-name>`, where `<action-name>` matches the value passed to `SubmitData`. This is cleaner than a catch-all with a switch statement, and scales better as you add more actions.
+
+### Catch-All Handler
+
+If you need to handle all card actions in one place, you can use the catch-all handler:
+
+```typescript
+
+  AdaptiveCardActionErrorResponse,
+  AdaptiveCardActionMessageResponse,
+} from '@microsoft/teams.api';
+
+// ...
+
+app.on('card.action', async ({ activity, send }) => {
+  const data = activity.value?.action?.data;
+  if (!data?.action) {
+    return {
+      statusCode: 400,
+      type: 'application/vnd.microsoft.error',
+      value: {
+        code: 'BadRequest',
+        message: 'No action specified',
+        innerHttpError: {
+          statusCode: 400,
+          body: { error: 'No action specified' },
+        },
+      },
+    } satisfies AdaptiveCardActionErrorResponse;
+  }
+
+  console.debug('Received action data:', data);
+
+  switch (data.action) {
+    case 'submit_feedback':
+      await send(`Feedback received: ${data.feedback}`);
+      break;
+
+    case 'purchase_item':
+      await send(`Purchase request received for game: ${data.choiceGameSingle}`);
+      break;
+
+    case 'save_profile':
+      await send(
+        `Profile saved!\nName: ${data.name}\nEmail: ${data.email}\nSubscribed: ${data.subscribe}`
+      );
+      break;
+
+    default:
+      return {
+        statusCode: 400,
+        type: 'application/vnd.microsoft.error',
+        value: {
+          code: 'BadRequest',
+          message: 'Unknown action',
+          innerHttpError: {
+            statusCode: 400,
+            body: { error: 'Unknown action' },
+          },
+        },
+      } satisfies AdaptiveCardActionErrorResponse;
+  }
+
+  return {
+    statusCode: 200,
+    type: 'application/vnd.microsoft.activity.message',
+    value: 'Action processed successfully',
+  } satisfies AdaptiveCardActionMessageResponse;
+});
+```
+
+:::note
+The `data` values are not typed and come as `any`, so you will need to cast them to the correct type in this case.
+:::
+
+## Responding from a card action
+
+A message sent from a card action handler is placed relative to the card that was clicked.
+In a 1:1 chat, when the card is inside a thread, `send()` sends the message into that thread, and when the card is at the top level it sends the message at the top level.
+This applies to `Action.Execute` and `Action.Submit`.
+In a channel, the response to a card button that arrives as a `message` (`Action.Submit`) is sent through the thread's reply chain, and the SDK sends the response to any other card action to the inbound conversation.
+See [Responding to edits, reactions and card actions](#sending-messages) for the rules.
+
+## Dynamic Typeahead Search
+
+An `Input.ChoiceSet` can fetch its choices dynamically as the user types, instead of listing them statically. Leave `choices` as an empty array and add a `choices.data` `Data.Query` that names a `dataset`. As the user types, Teams sends your bot an `application/search` invoke, and you return the matching results.
+
+```typescript
+
+const card: IAdaptiveCard = {
+  type: 'AdaptiveCard',
+  version: '1.5',
+  body: [
+    {
+      type: 'Input.ChoiceSet',
+      id: 'game',
+      label: 'Game',
+      placeholder: 'Search for a game',
+      style: 'filtered',
+      choices: [],
+      'choices.data': { type: 'Data.Query', dataset: 'nintendoGames' },
+    },
+  ],
+  actions: [
+    { type: 'Action.Execute', title: 'Submit', data: { action: 'submit_game' } },
+  ],
+};
+```
+
+Register a handler for the `application/search` invoke to return results as ` title, value ` pairs, where `title` is the display text and `value` is what gets submitted when the choice is selected:
+
+```typescript
+
+// ...
+
+const GAMES = ['Super Mario Odyssey', 'Metroid Dread', 'Splatoon 3'];
+
+app.on('card.search', async ({ activity }) => {
+  const query = activity.value.queryText?.toLowerCase() ?? '';
+  const results = GAMES.filter((g) => g.toLowerCase().includes(query)).map(
+    (g) => ({ title: g, value: g })
+  );
+
+  return {
+    statusCode: 200,
+    type: 'application/vnd.microsoft.search.searchResponse',
+    value: { results },
+  };
+});
+```
+
+The activity value also carries the query options (`skip`/`top` for paging) and the originating `dataset`, so a single handler can branch on the dataset when several `Input.ChoiceSet` inputs share it.
+
+---
+
+### PAGE: Handling Dialog Submissions
+
+# Handling Dialog Submissions
+
+When a user submits a form inside a dialog, your app receives a `dialog.submit` event. Use `dialog.submit.<action>` to handle a specific submission (where `action` matches the value passed via `SubmitData`), or `dialog.submit` for a catch-all. You can either send a response or proceed to more steps in the dialog (see [Multi-step Dialogs](#handling-multi-step-forms)).
+
+In this example, we show how to handle dialog submissions from an Adaptive Card form:
+
+```typescript
+
+// ...
+
+// The "action" field in SubmitData('simple_form') routes here
+app.on('dialog.submit.simple_form', async ({ activity, send }) => {
+  const name = activity.value.data.name;
+  await send(`Hi ${name}, thanks for submitting the form!`);
+  return {
+    task: {
+      type: 'message',
+      // This appears as a final message in the dialog
+      value: 'Form was submitted',
+    },
+  };
+});
+```
+
+Similarly, handling dialog submissions from rendered webpages is also possible:
+
+```typescript
+
+// ...
+
+// Webpage submissions route the same way — the webpage must include
+// the "action" field in the data passed to microsoftTeams.tasks.submitTask()
+app.on('dialog.submit.webpage_dialog', async ({ activity, send }) => {
+  const name = activity.value.data.name;
+  const email = activity.value.data.email;
+  await send(`Hi ${name}, thanks for submitting the form! We got that your email is ${email}`);
+  // Return status 200 to close the dialog without showing a message
+  return {
+    status: 200,
+  };
+});
+```
+
+A message sent from a submission handler is placed like a message sent from a card action.
+In a 1:1 chat it goes into the thread of the card whose button opened the dialog, when that card is inside a thread.
+See [Responding to edits, reactions and card actions](#sending-messages).
+
+---
+
+### PAGE: Receiving Files
+
+# Receiving Files
+
+Teams users can send files to agents by attaching them to chat messages. When users send files to an agent in 1:1 chat, or to an agentic user in a group chat or channel, they arrive as part of the context of the received message activity. `ctx.files` provides lazy access to the metadata and bytes of each attached file.
+
+An attached file is not delivered inline with the message. Teams stores the file in OneDrive or SharePoint and hands your agent a small metadata attachment describing it, including a short-lived, pre-authorized URL in personal scopes for traditional bots, while agentic users must make a Graph call via the `contentUrl`. Reading the contents means fetching the bytes from either URL over the network, so the download itself is deferred until explicitly called.
+
+This API covers file downloads in **personal (1:1) chats** for every agent. Agentic users can also download files in **group chats** and **channels** starting in version 2.2.0; traditional bots don't receive files there. See [Conversation scope support](#conversation-scope-support).
+
+## Enable file support in your manifest for traditional bots
+
+Teams only offers users the option to attach a file in 1:1 with a bot when your app manifest opts in. Set `supportsFiles` to `true` on your bot entry; without it the compose box shows no attach affordance for your agent, no file reaches your handler, and `ctx.files.list()` is always empty:
+
+```json
+"bots": [
+  {
+    "botId": "${{BOT_ID}}",
+    "scopes": ["personal"],
+    "supportsFiles": true
+  }
+]
+```
+
+## Enable file support on the blueprint for agentic users
+
+Agentic users need a Graph file permission consented on the agent's blueprint by an administrator in order to access files. See [inheritable permissions](https://learn.microsoft.com/entra/agent-id/concept-inheritable-permissions) for how an agent acquires those scopes.
+
+## Access attached files
+
+The accessor `ctx.files` is available on every activity context, but only inbound message activities carry attachments, so it is empty everywhere else. Use `list()` to get all files on the current message, including pasted images, or `first()` for the common single-file case. Both hand back the file's metadata rather than its contents, so listing is cheap even when the attached files are large:
+
+```typescript
+app.on('message', async ({ files, send }) => {
+  const attached = await files.list();
+
+  if (attached.length === 0) {
+    await send('Send me a file and I will read it.');
+    return;
+  }
+
+  await send(`You sent ${attached.length} file(s): ${attached.map((f) => f.name).join(', ')}`);
+});
+```
+
+Listing with `list()` returns the files in the same order they arrived. It never throws: activities with no attachments (or non-message activities) return an empty list, and malformed file entries are skipped rather than failing the whole batch.
+
+```typescript
+const file = await files.first();
+
+if (file) {
+  await send(`Reading ${file.name}...`);
+}
+```
+
+Images the user pasted into the message are listed too, with `attachmentStyle` set to `'inlineImage'` (see [Receiving Inline Images](#receiving-inline-images)). Files sent as file attachments have the `'file'` style. To list only one style, pass it as a filter to `list()` or `first()`:
+
+```typescript
+// Only files sent as file attachments
+const attachedFiles = await files.list({ attachmentStyle: 'file' });
+
+// Only images pasted into the message
+const pastedImages = await files.list({ attachmentStyle: 'inlineImage' });
+```
+
+:::note
+Starting in 2.2.0, `list()` and `first()` return pasted images when no filter is given. To keep the previous behavior of returning only file attachments, pass `'file'` as the filter.
+:::
+
+### File metadata
+
+Each `IIncomingFile` carries metadata describing the file, populated from what the platform reports:
+
+| Property | Description |
+|---|---|
+| `uniqueId` | The OneDrive/SharePoint drive-item id, when the platform provides it. Present only for files backed by ODSP storage. |
+| `name` | File name including its extension (e.g. `report.pdf`). |
+| `extension` | File extension without the dot (e.g. `pdf`), from the platform-supplied `fileType`. Absent when the platform omits it. |
+| `attachmentStyle` | How the file was attached: `'file'` when sent as a file attachment, or `'inlineImage'` when pasted into the message. |
+| `contentType` | The file's MIME type, when the source provides one. Always unset for file attachments received from a bot activity: the `file.download.info` attachment carries no MIME type, only the extension surfaced as `extension`. To learn the type of the bytes you actually received, read `contentType` on the downloaded file, which is resolved from the download response. For an inline image, see [Receiving Inline Images](#receiving-inline-images). |
+| `scope` | The conversation scope the file arrived in (`personal`, `groupChat`, or `channel`). |
+| `source` | Where the SDK found the file. Currently always `botActivity`. |
+| `contentUrl` | A browsable link to the file in OneDrive/SharePoint, when known. Not a fetchable download URL. For an inline image, it is the image's Bot API location. |
+| `raw` | The original wire attachment (the metadata object, not the bytes) — see [Access the raw attachment](#access-the-raw-attachment). |
+
+## Read a file
+
+The most common path is `download()`, which fetches the whole file and buffers it into an in-memory copy you own:
+
+```typescript
+const file = await files.first({ attachmentStyle: 'file' });
+
+if (file) {
+  const downloaded = await file.download();
+
+  await send(`Downloaded ${downloaded.filename} (${downloaded.bytes.length} bytes, ${downloaded.contentType})`);
+}
+```
+
+For text files, `text()` is a shortcut for `download()` followed by decoding:
+
+```typescript
+const file = await files.first({ attachmentStyle: 'file' });
+
+if (file) {
+  const contents = await file.text();
+  await send(`The file starts with: ${contents.slice(0, 100)}`);
+}
+```
+
+:::note
+Decoding with `text()` reads the downloaded bytes as UTF-8 by default, and is lossy: bytes that are not valid for the encoding become the replacement character (`U+FFFD`) instead of throwing. To decode a different encoding, pass an encoding name (e.g. `file.text('latin1')`). For binary files, read the raw bytes instead.
+:::
+
+To save a file to disk without holding it all in memory, use `saveAs()`, which streams straight to the path:
+
+```typescript
+await file.saveAs('./downloads/report.pdf');
+```
+
+The path is resolved relative to the process working directory, overwrites an existing file, and does not create missing parent directories.
+
+:::warning
+A file's `name` comes off the wire and is set by the uploader, so treat it as untrusted input rather than a destination. It may contain `/` or `\`, a drive or UNC prefix, or `..` segments, and no sanitization is performed on the developer's behalf. Therefore, no assumptions are made related to the destination like illegal characters based on operating system or naming collisions.
+:::
+
+For large files or streaming pipelines, `stream()` hands you the raw byte stream so you can process it as it arrives:
+
+```typescript
+const stream = await file.stream();
+
+for await (const chunk of stream) {
+  // process each chunk (e.g. pipe to a parser)
+}
+```
+
+An `IIncomingFile` handle holds no cached bytes: each call to `download()`, `text()`, `stream()`, or `saveAs()` fetches the file again. This matters because a file's download link is short-lived: the URL embeds its own pre-authorized `tempauth` credential, which can expire between reads. To read the same file several ways, call `download()` once and reuse the downloaded file it returns, which is a point-in-time copy whose readers never re-fetch:
+
+```typescript
+const downloaded = await file.download();
+
+const text = downloaded.text();          // decode as UTF-8
+const buffer = downloaded.arrayBuffer(); // the raw bytes
+await downloaded.saveAs('./copy.bin');   // write to disk, no re-fetch
+```
+
+| Property / method | Description |
+|---|---|
+| `bytes` | The buffered file bytes as a `Uint8Array`. |
+| `contentType` | MIME type resolved from the download response header, or the incoming file's metadata type if the response omits one. Falls back to `application/octet-stream` when neither provides a type, so this is never empty. |
+| `filename` | The resolved file name. |
+| `sourceUrl` | The URL the bytes were fetched from. |
+| `text(encoding?)` | Decode the bytes as UTF-8 (or a given encoding). Lossy; never throws. |
+| `arrayBuffer()` | Return the bytes as an `ArrayBuffer`. |
+| `saveAs(path)` | Write the buffered bytes to a local path (no re-fetch). |
+
+## Handle errors
+
+Byte retrieval can fail for a few well-defined reasons. All of them share a common base error, so a single check catches any of them and a new one can be added later without callers changing:
+
+```typescript
+
+  FileAccessError,
+  FileCredentialError,
+  FileError,
+  FileScopeNotSupportedError,
+  FileUrlExpiredError,
+  InlineImageAccessError,
+  InlineImageTransformationError,
+} from '@microsoft/teams.apps';
+```
+
+| Error | Raised when | Carries |
+|---|---|---|
+| **File URL expired** | The short-lived, pre-authorized download link lapsed before the bytes were fetched. | `reason`: <br/> **first fetch**, the link had already lapsed so no bytes were retrieved; <br /> **re-read**, an earlier download succeeded, but a later read through the same handle came after expiry. Avoid this by downloading once and reusing the downloaded file. |
+| **No Graph credential** | The Graph read an agentic user's file needs was ruled out before the request, because no credential was available. | `actor`<sup><a href="#actor">2</a></sup>: the identity a credential was being resolved for. <br /> `cause`: why acquiring the token failed, when it failed rather than simply returning nothing. |
+| **File access denied** | The Graph read an agentic user's file needs was refused by the storage service. | `status`: `401` when the token itself was rejected, `403` when the identity lacks the grant<sup><a href="#access-denied">1</a></sup>. <br/> `actor`<sup><a href="#actor">2</a></sup>: the identity that was refused. <br /> `details`: what the service said, if anything. |
+| **Inline image could not be converted** | The Teams service could not convert a pasted image for download. See [Formats that cannot be downloaded](#receiving-inline-images). | `status`: `415`. <br /> `code`: the service's error code, such as `TransformationFailed`, when present. <br /> `details`: what the service said, if anything. <br /> `actor`<sup><a href="#actor">2</a></sup>: the identity the read was attempted as. |
+| **Inline image access denied** | The Bot API refused the token presented for a pasted image. | `status`: `401` when the token itself was rejected, `403` when the identity is not allowed to read the image. <br /> `actor`<sup><a href="#actor">2</a></sup>: the identity that was refused. <br /> `details`: what the service said, if anything. |
+| **File scope not supported** | Download was called on a file from a conversation scope this API does not yet support, meaning anything other than personal, group chat, or channel for an agentic user. A traditional bot receives files only in personal (1:1) chats. | `scope`: the conversation scope. |
+
+<sup id="access-denied">1</sup> A **`403`** deliberately collapses causes the SDK cannot differentiate: an unconsented permission, a file the identity was never granted, and an item that does not exist all arrive the same way. There is no separate "file not found" case to branch on; `details` carries the service's own text for diagnosis. In a standard channel, a file picked from OneDrive or SharePoint, rather than uploaded, can be refused this way, because Teams does not grant the agent access to the picked item (see [Group chats and channels](#group-chats-and-channels)). A `401` is a different problem, which is why the status is reported rather than folded in: the token was rejected, so the fix is the token rather than the sharing.
+
+<sup id="actor">2</sup> `actor` names which identity the read was attempted as. The SDK chooses it, and today there are two:
+
+- **Agentic user**, chosen whenever the inbound activity carries an agentic identity. An agentic user reads as itself rather than as an app. Its Graph scopes come from its blueprint's inheritable permissions set by a tenant administrator or from a direct grant by a user with permissions to share it.
+- **App**, chosen for every other activity. Graph file retrieval is supported for agentic users, which read as their own identity; an app identity and user-delegated permissions may be used, but are not supported through the SDK at this time.
+
+The actor is absent when the failure came before any identity was selected, which is the case when the app has no Graph route configured at all.
+
+A transport or service failure, such as a Graph 5xx, is not one of these and surfaces as an ordinary error.
+
+You may add error handling based on the type of error: 
+
+```typescript
+try {
+  const downloaded = await file.download();
+  // ...
+} catch (err) {
+  if (err instanceof FileUrlExpiredError && err.reason === 'firstFetch') {
+    await send('That file link has expired before it could be re
