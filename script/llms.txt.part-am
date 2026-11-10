@@ -1,0 +1,22 @@
+
+## Bot Framework migration
+
+If you're migrating from the **Bot Framework SDK** (the `Microsoft.Bot.*` packages), both SDKs offer a path. Pick based on whether you want to **modernize end-to-end** or **host legacy code unchanged**.
+
+| | Migrate to M365 Agents SDK | Host legacy in Teams SDK |
+|---|---|---|
+| **What changes** | Package + namespace rename, `Program.cs` modernization, drop deprecated services | Add the compat package, register the adapter; existing handler unchanged |
+| **Effort** | Medium (modernization scope, not a one-line swap) | Minimal (install + a few lines of registration) |
+| **When to pick** | You want primitives preserved across a clean SDK switch; you may need cross-channel reach later | You want existing BotBuilder code running unchanged while you rewrite handlers piece by piece (or not at all) |
+
+## Next steps
+
+- **Sticking with Teams SDK?** Continue to [Get started](/get-started/quickstart-register) or the [TypeScript](#getting-started) / [C#](#getting-started) / [Python](#getting-started) guides.
+- **Need cross-channel reach?** Head to the [Microsoft 365 Agents SDK docs](https://learn.microsoft.com/en-us/microsoft-365/agents-sdk/).
+- **Already using Bot Framework or TeamsFx?** See [Bot Framework migration](#bot-framework-migration) above; both SDKs offer migration paths.
+
+:::tip Build for Teams *and* M365 Copilot at once
+Both SDKs reach Microsoft 365 Copilot through the same Teams client surface. Once your bot works in Teams, [enable it in M365 Copilot](./enabling-in-copilot) with a single CLI command, then republish or reload the app. No code change required.
+:::
+
+---
